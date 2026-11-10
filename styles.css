@@ -533,3 +533,16 @@ input.chip[type="date"] { min-height: 40px; color: var(--text); -webkit-appearan
 .copy-row code { grid-column: 1; background: none; padding: 0; }
 .copy-row span { grid-column: 2; grid-row: 1 / span 2; color: var(--accent); font-weight: 700; font-size: 14px; }
 .copy-row:active { opacity: .7; }
+
+/* ============ Sign-in ============ */
+.auth-btns { display: grid; gap: 8px; }
+.auth-btn {
+  display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 13px;
+  border-radius: 14px; background: var(--surface-2); border: 1px solid var(--border); font-weight: 650; font-size: 16px;
+}
+.auth-btn:active { transform: scale(.98); opacity: .85; }
+.row .ic svg, .row .v svg[viewBox="0 0 24 24"]:not(.i) { width: 18px; height: 18px; }
+.gh-code {
+  font: 700 34px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-align: center;
+  padding: 22px 10px; margin: 16px 0 4px; border-radius: 18px; background: var(--surface-2); -webkit-user-select: all; user-select: all;
+}

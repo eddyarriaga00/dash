@@ -1,5 +1,5 @@
 // Bump VERSION whenever you deploy changes so phones pick up the new files.
-const VERSION = 'dash-v8';
+const VERSION = 'dash-v9';
 const ASSETS = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png'

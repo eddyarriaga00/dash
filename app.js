@@ -226,6 +226,92 @@ async function joinSync(code) {
   } catch { toast('Couldn’t reach the sync server'); }
 }
 
+/* =========================================================
+   ACCOUNTS: Google / GitHub sign-in. A sign-in is just a nicer way to
+   find your vault: the dash-auth function verifies who you are and
+   returns the vault code tied to that account.
+   ========================================================= */
+const GOOGLE_CLIENT_ID = '179677240847-tfa1bts2arm25d1vptjb6cqltpqpbm9v.apps.googleusercontent.com';
+const authCall = async body => {
+  const r = await fetch(`${SB_URL}/functions/v1/dash-auth`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` }, body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error(j.error || r.status);
+  return j;
+};
+function googleSignIn() {
+  const nonce = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+  try { localStorage.setItem('dash.nonce', nonce); } catch { }
+  const q = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID, response_type: 'id_token', scope: 'openid profile email',
+    redirect_uri: location.origin + location.pathname, nonce, prompt: 'select_account',
+  });
+  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + q;
+}
+async function finishGoogle(idToken) {
+  const nonce = localStorage.getItem('dash.nonce'); localStorage.removeItem('dash.nonce');
+  toast('Signing you in…');
+  try { const { ticket } = await authCall({ action: 'google', id_token: idToken, nonce }); await redeemTicket(ticket); }
+  catch { toast('Google sign-in didn’t work — try again'); }
+}
+let ghPoll = null;
+async function githubSignIn() {
+  let d;
+  try { d = await authCall({ action: 'gh_start' }); } catch { return toast('Couldn’t reach GitHub — try again'); }
+  if (!d.user_code) return toast('Couldn’t reach GitHub — try again');
+  ghPoll = { device: d.device_code, interval: (d.interval || 5) * 1000, until: Date.now() + (d.expires_in || 900) * 1000 };
+  openSheet(`
+    <div class="sheet-title">Sign in with GitHub</div>
+    <p class="muted">GitHub will ask for this code. Tap the button to copy it and open GitHub, paste it there, then come back.</p>
+    <div class="gh-code">${esc(d.user_code)}</div>
+    <div class="btn-row"><button class="btn" data-a="ghOpen" data-code="${esc(d.user_code)}">Copy code & open GitHub</button></div>
+    <p class="muted" style="text-align:center;margin-top:14px">Waiting for you to approve…</p>`, { onClose: () => { ghPoll = null; } });
+  setTimeout(pollGithub, ghPoll.interval);
+}
+async function pollGithub() {
+  const p = ghPoll; if (!p || p.busy) return;
+  if (Date.now() > p.until) { ghPoll = null; closeSheet(); return toast('That code expired — try again'); }
+  p.busy = true;
+  try {
+    const r = await authCall({ action: 'gh_poll', device_code: p.device });
+    if (r.ticket) { ghPoll = null; closeSheet(); await redeemTicket(r.ticket); return; }
+    if (r.reason === 'slow_down') p.interval += 5000;
+    if (r.reason === 'expired_token' || r.reason === 'access_denied') { ghPoll = null; closeSheet(); return toast('GitHub sign-in was cancelled'); }
+  } catch { }
+  p.busy = false;
+  if (ghPoll === p) setTimeout(pollGithub, p.interval);
+}
+async function redeemTicket(ticket) {
+  const mine = SY.vault || newVault();
+  let r;
+  try { r = await authCall({ action: 'redeem', ticket, vault: mine }); } catch { return toast('Sign-in expired — try again'); }
+  const account = { ...(SY.account || {}), name: (SY.account && SY.account.name) || r.name, [r.provider]: true };
+  if (r.vault === mine) {
+    // New sign-in → now tied to this device's data (or an extra login for the same account).
+    if (!SY.vault) SY = { vault: mine, rev: 0, dirty: true };
+    SY.account = account; saveSY();
+    if (!S.name && r.provider === 'google') { S.name = String(r.name).slice(0, 24); persist(); }
+    await syncNow();
+    toast(r.existing ? `Welcome back, ${r.name}` : `Signed in as ${r.name} ✓`);
+  } else {
+    // This sign-in already has a dashboard saved from another device.
+    const hasLocal = SY.vault || S.tasks.length || S.notes.length;
+    if (hasLocal && !confirm(`${r.name} already has a Dash saved. Replace what’s on this device with it?`)) return toast('Sign-in cancelled');
+    try {
+      const [remote] = await rpc('dash_pull', { vault: r.vault });
+      if (remote) { SY = { vault: r.vault, rev: remote.rev, dirty: false, last: Date.now(), account: { name: r.name, [r.provider]: true } }; saveSY(); adopt(remote.data); }
+      else { SY = { vault: r.vault, rev: 0, dirty: true, account: { name: r.name, [r.provider]: true } }; saveSY(); await syncNow(); }
+      setSyncStatus('ok'); toast(`Welcome back, ${r.name}`);
+    } catch { return toast('Couldn’t load your saved Dash — try again'); }
+  }
+  CAL = {}; applyTheme(); render(true);
+}
+const AUTH_ICONS = {
+  google: '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#4285F4" d="M23 12.3c0-.8-.1-1.6-.2-2.3H12v4.4h6.2a5.300 5.300 0 0 1-2.300 3.500v2.900h3.700c2.200-2 3.400-5 3.400-8.500z"/><path fill="#34A853" d="M12 23.500c3.100 0 5.700-1 7.600-2.800l-3.700-2.900c-1 .700-2.300 1.100-3.900 1.100-3 0-5.500-2-6.400-4.700H1.800v3A11.500 11.500 0 0 0 12 23.500z"/><path fill="#FBBC05" d="M5.600 14.200a6.900 6.900 0 0 1 0-4.400v-3H1.800a11.500 11.500 0 0 0 0 10.400z"/><path fill="#EA4335" d="M12 5.100c1.700 0 3.200.6 4.400 1.700l3.300-3.300A11.500 11.500 0 0 0 1.800 6.800l3.800 3c.9-2.700 3.400-4.700 6.400-4.700z"/></svg>',
+  github: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.500 11.500 0 0 0-3.600 22.400c.6.100.8-.2.800-.600v-2c-3.200.700-3.900-1.400-3.900-1.400-.5-1.300-1.300-1.700-1.300-1.700-1-.700.100-.700.100-.700 1.200.100 1.800 1.200 1.800 1.200 1 1.800 2.700 1.300 3.400 1 .1-.800.4-1.300.7-1.600-2.600-.300-5.300-1.300-5.300-5.700 0-1.300.5-2.300 1.200-3.100-.1-.300-.5-1.500.1-3.100 0 0 1-.300 3.200 1.200a11 11 0 0 1 5.800 0C17.200 4.700 18.200 5 18.200 5c.6 1.600.2 2.800.1 3.100.8.800 1.200 1.800 1.200 3.100 0 4.400-2.700 5.400-5.300 5.700.4.400.8 1.100.8 2.200v3.200c0 .400.200.700.800.600A11.500 11.500 0 0 0 12 .5z"/></svg>',
+};
+
 /* ---------- theme ---------- */
 function applyTheme() {
   const root = document.documentElement;
@@ -955,6 +1041,21 @@ function viewSettings() {
   return `
   <header class="page-head"><button class="icon-btn" data-a="tab" data-tab="home" aria-label="Back" style="transform:scaleX(-1)">${I.chev}</button><h1>Settings</h1></header>
 
+  <div class="settings-label">Account</div>
+  <div class="list">
+    ${SY.account ? `
+      ${row('👤', esc(SY.account.name || 'Signed in'), `<span class="v">${['google', 'github'].filter(k => SY.account[k]).map(k => AUTH_ICONS[k]).join(' ')}</span>`)}
+      ${!SY.account.google ? `<button class="row" data-a="googleSignIn"><span class="ic">${AUTH_ICONS.google}</span><span class="row-title">Also sign in with Google</span><span class="v">${I.chev}</span></button>` : ''}
+      ${!SY.account.github ? `<button class="row" data-a="githubSignIn"><span class="ic">${AUTH_ICONS.github}</span><span class="row-title">Also sign in with GitHub</span><span class="v">${I.chev}</span></button>` : ''}
+      ${row('🚪', '<span style="color:var(--danger)">Sign out on this device</span>', '', 'signOut')}`
+    : `
+      <div class="pad muted" style="font-size:14px">Sign in to back up your Dash and get it on every device, without codes.</div>
+      <div class="pad auth-btns" style="padding-top:0">
+        <button class="auth-btn" data-a="googleSignIn">${AUTH_ICONS.google}Continue with Google</button>
+        <button class="auth-btn" data-a="githubSignIn">${AUTH_ICONS.github}Continue with GitHub</button>
+      </div>`}
+  </div>
+
   <div class="settings-label">Cloud sync</div>
   <div class="list">
     ${SY.vault ? `
@@ -963,7 +1064,7 @@ function viewSettings() {
       ${row('📲', 'Add another device', `<span class="v">Share code${I.chev}</span>`, 'shareCode')}
       ${row('🔌', '<span style="color:var(--danger)">Turn off on this device</span>', '', 'disableSync')}`
     : `
-      <div class="pad muted" style="font-size:14px">Back up everything and keep your phone, laptop and iPad in sync. No account needed — you get a private sync code.</div>
+      <div class="pad muted" style="font-size:14px">Prefer no account? Sync with a private code instead.</div>
       <div class="pad" style="padding-top:0"><button class="btn" data-a="enableSync">Turn on cloud sync</button></div>
       <form class="pad quick-add" data-form="joinSync" style="padding-top:0" autocomplete="off">
         <input class="input" name="code" placeholder="Have a code? Paste it here" autocapitalize="off" autocorrect="off" spellcheck="false">
@@ -1348,6 +1449,16 @@ const A = {
   },
   importData: () => $('#import-file').click(),
   enableSync: () => enableSync(),
+  googleSignIn: () => googleSignIn(),
+  githubSignIn: () => githubSignIn(),
+  ghOpen: async el => {
+    try { await navigator.clipboard.writeText(el.dataset.code); toast('Code copied'); } catch { }
+    window.open('https://github.com/login/device', '_blank', 'noopener');
+  },
+  signOut: () => {
+    if (!confirm('Sign out on this device? Your data stays here and in your account.')) return;
+    SY = {}; saveSY(); syncStatus = 'off'; CAL = {}; render(); toast('Signed out');
+  },
   copyVal: async el => { try { await navigator.clipboard.writeText(el.dataset.v); toast('Copied'); } catch { prompt('Copy this:', el.dataset.v); } },
   updateShifts: async () => {
     if (S.calUrl) return loadCal(true);
@@ -1453,6 +1564,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
   if (S.focus.running && focusLeft() <= 0) focusComplete();
   if (!$('#sheet-root').innerHTML && !document.activeElement?.matches('input, textarea')) render();
+  if (ghPoll) pollGithub();
   if (!S.calUrl && SY.vault) { CAL.ts = 0; loadCal().then(() => S.tab === 'settings' && softRender()); }
   loadWeather(); syncNow();
 });
@@ -1468,6 +1580,12 @@ applyTheme();
 render(true);
 loadWeather();
 syncNow();
+// Returning from Google sign-in: the ID token arrives in the URL fragment.
+if (location.hash.includes('id_token=') || location.hash.includes('error=')) {
+  const h = new URLSearchParams(location.hash.slice(1));
+  history.replaceState(null, '', location.pathname);
+  if (h.get('id_token')) finishGoogle(h.get('id_token')); else toast('Google sign-in was cancelled');
+}
 // Home-screen shortcuts: ?add=task / ?add=note
 const addParam = new URLSearchParams(location.search).get('add');
 if (addParam) { history.replaceState(null, '', location.pathname); setTimeout(() => addParam === 'note' ? noteSheet() : quickAddSheet(), 350); }

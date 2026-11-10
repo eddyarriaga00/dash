@@ -1,10 +1,9 @@
 // dash-auth: sign-in for Dash without any client secrets.
-//  - Google: Google Identity Services posts an ID token here (redirect mode); we verify it with Google.
+//  - Google: the app gets an ID token straight back from Google and sends it here; we verify it with Google.
 //  - GitHub: device flow (user types a short code on github.com); we swap the device code for a token
 //    and ask GitHub who it belongs to.
 // A verified sign-in becomes a one-time ticket that the app redeems for its vault code.
-// Deployed with JWT verification off, because Google posts to it directly.
-const APP = "https://eddyarriaga00.github.io/dash/";
+// Called only by the app, with the project's publishable key (JWT verification stays on).
 const ORIGINS = ["https://eddyarriaga00.github.io", "http://localhost:8787"];
 const GOOGLE_CLIENT_ID = "179677240847-tfa1bts2arm25d1vptjb6cqltpqpbm9v.apps.googleusercontent.com";
 const GITHUB_CLIENT_ID = "Ov23liP7kCHZcqhggpTU";
@@ -36,26 +35,23 @@ Deno.serve(async (req) => {
     "Vary": "Origin",
   };
   const json = (body: unknown, status = 200) => Response.json(body, { status, headers: cors });
-  const back = (frag: string) => new Response(null, { status: 303, headers: { Location: `${APP}#${frag}` } });
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
-  if (req.method !== "POST") return back("auth_error=method");
+  if (req.method !== "POST") return json({ error: "POST only" }, 405);
   if (!KEY) return json({ error: "server not configured" }, 500);
 
   try {
-    const type = req.headers.get("content-type") ?? "";
-
-    // ---- Google redirect: form post with the ID token ----
-    if (type.includes("application/x-www-form-urlencoded")) {
-      const form = new URLSearchParams(await req.text());
-      const cookie = (req.headers.get("cookie") ?? "").match(/(?:^|;\s*)g_csrf_token=([^;]+)/)?.[1];
-      if (!cookie || cookie !== form.get("g_csrf_token")) return back("auth_error=csrf");
-      const info = await (await fetch("https://oauth2.googleapis.com/tokeninfo?id_token=" + encodeURIComponent(form.get("credential") ?? ""))).json();
-      const okIss = info.iss === "accounts.google.com" || info.iss === "https://accounts.google.com";
-      if (info.aud !== GOOGLE_CLIENT_ID || !okIss || !info.sub || Number(info.exp) * 1000 < Date.now()) return back("auth_error=google");
-      return back("ticket=" + await makeTicket("google:" + info.sub, info.given_name || info.name || info.email || "Google"));
-    }
-
     const body = await req.json();
+
+    // ---- Google: the app sends the ID token Google handed back to it; we verify it with Google ----
+    if (body.action === "google") {
+      const info = await (await fetch("https://oauth2.googleapis.com/tokeninfo?id_token=" + encodeURIComponent(String(body.id_token ?? "")))).json();
+      const okIss = info.iss === "accounts.google.com" || info.iss === "https://accounts.google.com";
+      const okNonce = typeof body.nonce === "string" && body.nonce.length >= 16 && info.nonce === body.nonce;
+      if (info.aud !== GOOGLE_CLIENT_ID || !okIss || !okNonce || !info.sub || Number(info.exp) * 1000 < Date.now()) {
+        return json({ error: "google sign-in not valid" }, 401);
+      }
+      return json({ ticket: await makeTicket("google:" + info.sub, info.given_name || info.name || info.email || "Google") });
+    }
 
     // ---- GitHub device flow ----
     if (body.action === "gh_start") {

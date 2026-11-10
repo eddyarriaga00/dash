@@ -46,7 +46,16 @@ const I = {
 /* ---------- state ---------- */
 const KEY = 'dash.v1';
 const ACCENTS = { violet: '#7c6cff', blue: '#3d8bff', teal: '#14b8a6', green: '#22c55e', orange: '#ff8a3d', pink: '#f43f8e', red: '#ef4444', gold: '#eab308' };
-const HABIT_EMOJI = ['💧', '🏃', '📚', '🧘', '💪', '🥗', '😴', '✍️', '🎸', '💊', '🚶', '🧠', '🌱', '☀️', '🦷', '📵'];
+const HABIT_EMOJI = ['💊', '🚿', '🦷', '💪', '📚', '🧘', '🏃', '🥗', '😴', '🧴', '🛏️', '💻', '🚶', '🧹', '✍️', '📵', '🧠', '🌱', '☀️', '🎸'];
+const WHEN = { am: ['Morning', '🌅'], any: ['Anytime', '☀️'], pm: ['Evening', '🌙'] };
+const HABIT_IDEAS = [
+  ['💊', 'Take medicine', 'am', 1], ['🚿', 'Shower', 'am', 1], ['🦷', 'Brush teeth', 'am', 2], ['🛏️', 'Make bed', 'am', 1],
+  ['🧴', 'Skincare', 'pm', 1], ['💪', 'Workout', 'any', 1], ['🚶', 'Walk', 'any', 1], ['🧘', 'Meditate', 'any', 1],
+  ['📖', 'Study', 'any', 1], ['💻', 'Code', 'any', 1], ['📚', 'Read', 'pm', 1], ['🥗', 'Eat a real meal', 'any', 3],
+  ['🧹', 'Tidy up', 'any', 1], ['✍️', 'Journal', 'pm', 1], ['📵', 'No phone in bed', 'pm', 1], ['😴', 'In bed on time', 'pm', 1],
+  ['🦷', 'Floss', 'pm', 1], ['💊', 'Vitamins', 'am', 1], ['☀️', 'Get outside', 'any', 1], ['📞', 'Call family', 'any', 1],
+];
+const NBA_TEAMS = 'ATL BOS BKN CHA CHI CLE DAL DEN DET GS HOU IND LAC LAL MEM MIA MIL MIN NO NY OKC ORL PHI PHX POR SAC SA TOR UTAH WSH'.split(' ');
 const LINK_EMOJI = ['🔗', '🐙', '📺', '📧', '📅', '🎵', '💬', '🛒', '📰', '🏀', '💼', '🤖', '📷', '🎮', '🗺️', '💳'];
 const MOODS = [['😣', 'Rough'], ['😕', 'Meh'], ['😐', 'Okay'], ['🙂', 'Good'], ['😄', 'Great']];
 const CD_EMOJI = ['🎉', '✈️', '🎂', '🏖️', '🎓', '🎄', '💍', '🏆', '🎟️', '📦', '🏀', '❤️'];
@@ -55,10 +64,13 @@ const DEFAULTS = () => ({
   name: '', accent: 'violet', theme: 'dark', units: 'F', location: null,
   tasks: [],
   habits: [
-    { id: uid(), name: 'Drink water', emoji: '💧', log: {} },
-    { id: uid(), name: 'Workout', emoji: '💪', log: {} },
-    { id: uid(), name: 'Read', emoji: '📚', log: {} },
+    { id: uid(), name: 'Take medicine', emoji: '💊', when: 'am', target: 1, log: {} },
+    { id: uid(), name: 'Shower', emoji: '🚿', when: 'am', target: 1, log: {} },
+    { id: uid(), name: 'Brush teeth', emoji: '🦷', when: 'am', target: 2, log: {} },
+    { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
+    { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
+  widgets: { nba: true, anime: true }, team: '',
   notes: [],
   links: [
     { id: uid(), title: 'Calendar', url: 'https://calendar.google.com', emoji: '📅' },
@@ -77,7 +89,7 @@ const DEFAULTS = () => ({
 function load() {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY));
-    if (raw && typeof raw === 'object') { const d = DEFAULTS(); return { ...d, ...raw, focus: { ...d.focus, ...raw.focus } }; }
+    if (raw && typeof raw === 'object') { const d = DEFAULTS(); return { ...d, ...raw, focus: { ...d.focus, ...raw.focus }, widgets: { ...d.widgets, ...raw.widgets } }; }
   } catch { }
   return DEFAULTS();
 }
@@ -120,7 +132,7 @@ const newVault = () => 'dash-' + [...crypto.getRandomValues(new Uint8Array(24))]
 function payload() { const o = { ...S }; LOCAL_ONLY.forEach(k => delete o[k]); return o; }
 function adopt(data) {
   const keep = {}; LOCAL_ONLY.forEach(k => keep[k] = S[k]);
-  const d = DEFAULTS(); S = { ...d, ...data, ...keep, focus: { ...d.focus, ...data.focus } };
+  const d = DEFAULTS(); S = { ...d, ...data, ...keep, focus: { ...d.focus, ...data.focus }, widgets: { ...d.widgets, ...data.widgets } };
   persist();
 }
 // Merge for when both sides changed: union lists by id, local edits win, deletions stick.
@@ -322,18 +334,29 @@ function addTask(raw, defaultDue = '') {
 }
 
 /* ---------- habits helpers ---------- */
+const hTarget = h => Math.max(1, h.target || 1);
+const hCount = (h, k) => { const v = h.log[k]; return v === true ? hTarget(h) : (v || 0); };
+const hDone = (h, k = dkey()) => hCount(h, k) >= hTarget(h);
+const byWhen = (a, b) => 'am any pm'.indexOf(a.when || 'any') - 'am any pm'.indexOf(b.when || 'any');
+// Tap = one more; tapping a finished habit clears it. Past days toggle done/not done.
+function bumpHabit(h, k) {
+  const t = hTarget(h), c = hCount(h, k);
+  if (k !== dkey()) { if (c >= t) delete h.log[k]; else h.log[k] = t; }
+  else if (c >= t) delete h.log[k]; else h.log[k] = c + 1;
+  return hDone(h, k);
+}
 function streak(h) {
-  let d = new Date(); if (!h.log[dkey(d)]) d = addDays(d, -1);
-  let n = 0; while (h.log[dkey(d)]) { n++; d = addDays(d, -1); }
+  let d = new Date(); if (!hDone(h, dkey(d))) d = addDays(d, -1);
+  let n = 0; while (hDone(h, dkey(d))) { n++; d = addDays(d, -1); }
   return n;
 }
 function bestStreak(h) {
-  const keys = Object.keys(h.log).filter(k => h.log[k]).sort();
+  const keys = Object.keys(h.log).filter(k => hDone(h, k)).sort();
   let best = 0, cur = 0, prev = null;
   for (const k of keys) { cur = prev && dayDiff(parseKey(prev), parseKey(k)) === 1 ? cur + 1 : 1; best = Math.max(best, cur); prev = k; }
   return best;
 }
-const rate = (h, days = 30) => { let n = 0; for (let i = 0; i < days; i++) if (h.log[dkey(addDays(new Date(), -i))]) n++; return Math.round(n / days * 100); };
+const rate = (h, days = 30) => { let n = 0; for (let i = 0; i < days; i++) if (hDone(h, dkey(addDays(new Date(), -i)))) n++; return Math.round(n / days * 100); };
 
 /* ---------- countdown helpers ---------- */
 function nextDate(c) {
@@ -472,6 +495,60 @@ function citySearch(q) {
 }
 
 /* =========================================================
+   LIVE WIDGETS: NBA scores (ESPN) + anime airing today (AniList)
+   ========================================================= */
+let NBA = { ts: 0, games: null }, ANI = { day: '', list: null };
+async function loadNBA(force) {
+  if (!S.widgets.nba || (!force && Date.now() - NBA.ts < 45e3)) return;
+  NBA.ts = Date.now();
+  try {
+    const j = await (await fetch('https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard')).json();
+    NBA.games = (j.events || []).map(e => {
+      const c = e.competitions[0], side = s => { const x = c.competitors.find(y => y.homeAway === s); return { abbr: x.team.abbreviation, logo: x.team.logo, score: x.score, win: x.winner }; };
+      return { state: e.status.type.state, detail: e.status.type.shortDetail, date: e.date, home: side('home'), away: side('away') };
+    });
+  } catch { NBA.games = NBA.games || []; }
+  const el = $('#nba'); if (el) el.outerHTML = nbaCard();
+}
+function nbaCard() {
+  if (!S.widgets.nba) return '';
+  const fav = g => S.team && (g.home.abbr === S.team || g.away.abbr === S.team);
+  const order = { in: 0, pre: 1, post: 2 };
+  const games = [...(NBA.games || [])].sort((a, b) => fav(b) - fav(a) || order[a.state] - order[b.state] || a.date.localeCompare(b.date));
+  const team = (t, g) => `<div class="tm ${g.state === 'post' && !t.win ? 'lost' : ''}"><img src="${esc(t.logo)}" alt="" loading="lazy"><b>${esc(t.abbr)}</b><span>${g.state === 'pre' ? '' : esc(t.score)}</span></div>`;
+  return `<section class="card" id="nba">
+    ${secHead('🏀 NBA today', `<a class="link-btn" href="https://eddyarriaga00.github.io/NBA-Tracker-STATS-APP/" target="_blank" rel="noopener">Open app</a>`)}
+    ${!NBA.games ? '<div class="muted">Loading scores…</div>' : !games.length ? '<div class="muted">No games today.</div>' : `<div class="cd-row">${games.map(g => `
+      <div class="game ${fav(g) ? 'fav' : ''} ${g.state}">${team(g.away, g)}${team(g.home, g)}
+        <div class="gs">${g.state === 'in' ? '<i></i>' : ''}${g.state === 'pre' ? new Date(g.date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : esc(g.detail)}</div></div>`).join('')}</div>`}
+  </section>`;
+}
+async function loadAnime() {
+  if (!S.widgets.anime || (ANI.day === dkey() && ANI.list)) return;
+  const a = Math.floor(parseKey(dkey()).getTime() / 1000), b = a + 86400;
+  const query = `{Page(perPage:50){airingSchedules(airingAt_greater:${a - 1},airingAt_lesser:${b},sort:TIME){airingAt episode media{id title{english romaji} coverImage{medium} popularity isAdult countryOfOrigin siteUrl}}}}`;
+  try {
+    const j = await (await fetch('https://graphql.anilist.co', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }) })).json();
+    ANI = { day: dkey(), list: j.data.Page.airingSchedules.filter(x => !x.media.isAdult && x.media.countryOfOrigin === 'JP')
+      .sort((x, y) => y.media.popularity - x.media.popularity).slice(0, 10).sort((x, y) => x.airingAt - y.airingAt) };
+  } catch { ANI.list = ANI.list || []; }
+  const el = $('#anime'); if (el) el.outerHTML = animeCard();
+}
+function animeCard() {
+  if (!S.widgets.anime) return '';
+  const now = Date.now() / 1000;
+  return `<section class="card" id="anime">
+    ${secHead('📺 Airing today', `<a class="link-btn" href="https://eddyarriaga00.github.io/anitrack/" target="_blank" rel="noopener">AniTrack</a>`)}
+    ${!ANI.list ? '<div class="muted">Loading schedule…</div>' : !ANI.list.length ? '<div class="muted">Nothing airing today.</div>' : `<div class="cd-row">${ANI.list.map(x => `
+      <a class="ani ${x.airingAt < now ? 'aired' : ''}" href="${esc(x.media.siteUrl)}" target="_blank" rel="noopener">
+        <img src="${esc(x.media.coverImage.medium)}" alt="" loading="lazy">
+        <span class="t">${esc(x.media.title.english || x.media.title.romaji)}</span>
+        <span class="d">Ep ${x.episode} · ${x.airingAt < now ? 'Out now' : new Date(x.airingAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></a>`).join('')}</div>`}
+  </section>`;
+}
+const loadWidgets = () => { if (S.tab === 'home') { loadNBA(); loadAnime(); } };
+
+/* =========================================================
    FOCUS TIMER
    ========================================================= */
 const focusLen = m => (m === 'focus' ? S.focus.focusMin : S.focus.breakMin) * 60;
@@ -559,8 +636,8 @@ function viewHome() {
   const now = new Date(), h = now.getHours(), t = dkey();
   const greet = h < 5 ? 'Up late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 22 ? 'Good evening' : 'Good night';
   const tt = todayTasks();
-  const hDone = S.habits.filter(x => x.log[t]).length;
-  const total = tt.total + S.habits.length, done = tt.done.length + hDone;
+  const nDone = S.habits.filter(x => hDone(x, t)).length;
+  const total = tt.total + S.habits.length, done = tt.done.length + nDone;
   const pct = total ? done / total : 0;
   const sessions = S.focus.sessions[t] || 0;
 
@@ -586,7 +663,7 @@ function viewHome() {
       <div class="ring-wrap">${ring(pct)}<div class="ring-label"><div>${Math.round(pct * 100)}%<small>today</small></div></div></div>
       <div class="today-stats">
         <div class="ts"><span class="dot"></span>Tasks<b>${tt.done.length}/${tt.total}</b></div>
-        <div class="ts"><span class="dot" style="background:#ff8a3d"></span>Habits<b>${hDone}/${S.habits.length}</b></div>
+        <div class="ts"><span class="dot" style="background:#ff8a3d"></span>Habits<b>${nDone}/${S.habits.length}</b></div>
         <div class="ts"><span class="dot" style="background:#4aa8ff"></span>Focus<b>${sessions} ${sessions === 1 ? 'session' : 'sessions'}</b></div>
       </div>
     </div>
@@ -602,9 +679,12 @@ function viewHome() {
   </section>
 
   ${S.habits.length ? `<section class="card">
-    ${secHead('Habits', `<button class="link-btn" data-a="tab" data-tab="habits">${hDone}/${S.habits.length}</button>`)}
-    <div class="chip-row">${S.habits.map(x => `<button class="habit-chip ${x.log[t] ? 'on' : ''}" data-a="toggleHabit" data-id="${x.id}" data-day="${t}"><span>${x.emoji}</span>${esc(x.name)}</button>`).join('')}</div>
+    ${secHead('Habits', `<button class="link-btn" data-a="tab" data-tab="habits">${nDone}/${S.habits.length}</button>`)}
+    <div class="chip-row">${[...S.habits].sort((a, b) => hDone(a, t) - hDone(b, t) || byWhen(a, b)).map(x => `<button class="habit-chip ${hDone(x, t) ? 'on' : ''}" data-a="toggleHabit" data-id="${x.id}" data-day="${t}"><span>${x.emoji}</span>${esc(x.name)}${hTarget(x) > 1 ? `<small>${hCount(x, t)}/${hTarget(x)}</small>` : ''}</button>`).join('')}</div>
   </section>` : ''}
+
+  ${nbaCard()}
+  ${animeCard()}
 
   <section class="card">
     ${secHead('Quick links', `<button class="link-btn" data-a="goSettings">Edit</button>`)}
@@ -692,29 +772,40 @@ function viewTasks() {
 }
 
 function viewHabits() {
-  const t = new Date();
+  const t = new Date(), tk = dkey();
   const week = Array.from({ length: 7 }, (_, i) => addDays(t, i - 6));
-  const hDone = S.habits.filter(x => x.log[dkey()]).length;
-  let wk = 0; S.habits.forEach(h => week.forEach(d => { if (h.log[dkey(d)]) wk++; }));
+  const nDone = S.habits.filter(x => hDone(x)).length;
+  let wk = 0; S.habits.forEach(h => week.forEach(d => { if (hDone(h, dkey(d))) wk++; }));
   const wkPct = S.habits.length ? Math.round(wk / (S.habits.length * 7) * 100) : 0;
+  const card = h => {
+    const s = streak(h), tg = hTarget(h), c = hCount(h, tk), done = c >= tg;
+    return `<section class="card habit ${done ? 'is-done' : ''}">
+      <div class="habit-top">
+        <button class="habit-emoji" data-a="habitDetail" data-id="${h.id}" aria-label="Details">${h.emoji}</button>
+        <div class="habit-info" data-a="habitDetail" data-id="${h.id}"><div class="habit-name">${esc(h.name)}</div>
+          <div class="habit-sub">${s ? `🔥 ${s} day${s === 1 ? '' : 's'} · ` : ''}${rate(h)}% this month</div></div>
+        <button class="habit-go ${done ? 'on' : ''}" data-a="toggleHabit" data-id="${h.id}" data-day="${tk}" aria-label="${done ? 'Undo' : 'Mark done'}">${done ? I.check : tg > 1 ? `<b>${c}/${tg}</b>` : I.check}</button>
+      </div>
+      <div class="week">${week.map(d => { const k = dkey(d), today = k === tk, part = hCount(h, k) > 0 && !hDone(h, k); return `<div class="wd ${today ? 'is-today' : ''}">${today ? 'Today' : d.toLocaleDateString(undefined, { weekday: 'narrow' })}
+        <button class="${hDone(h, k) ? 'on' : part ? 'part' : ''}" data-a="toggleHabit" data-id="${h.id}" data-day="${k}" aria-label="${k}">${I.check}</button></div>`; }).join('')}</div>
+    </section>`;
+  };
+  const groups = Object.entries(WHEN).map(([k, [label, icon]]) => {
+    const list = S.habits.filter(h => (h.when || 'any') === k); if (!list.length) return '';
+    const d = list.filter(h => hDone(h)).length;
+    return `<div class="group-label">${icon} ${label} <span class="muted" style="font-weight:600">· ${d}/${list.length}</span></div>${list.map(card).join('')}`;
+  }).join('');
+  const have = new Set(S.habits.map(h => h.name.toLowerCase()));
+  const ideas = HABIT_IDEAS.map((x, i) => [x, i]).filter(([x]) => !have.has(x[1].toLowerCase()));
   return `
   <header class="page-head"><h1>Habits</h1><div class="spacer"></div><button class="icon-btn on" data-a="addHabit" aria-label="New habit">${I.plus}</button></header>
   ${S.habits.length ? `<section class="card"><div class="today">
-    <div class="ring-wrap">${ring(S.habits.length ? hDone / S.habits.length : 0, 72, 8)}<div class="ring-label"><div style="font-size:16px">${hDone}/${S.habits.length}</div></div></div>
-    <div class="today-stats"><div class="ts">Done today<b>${hDone}</b></div><div class="ts">Last 7 days<b>${wkPct}%</b></div><div class="ts">Longest streak<b>${Math.max(0, ...S.habits.map(streak))} 🔥</b></div></div>
-  </div></section>` : ''}
-  ${S.habits.map(h => {
-    const s = streak(h);
-    return `<section class="card habit">
-      <div class="habit-top" data-a="habitDetail" data-id="${h.id}">
-        <div class="habit-emoji">${h.emoji}</div>
-        <div><div class="habit-name">${esc(h.name)}</div><div class="habit-sub">${rate(h)}% last 30 days</div></div>
-        <div class="streak ${s ? '' : 'zero'}">${s} 🔥</div>
-      </div>
-      <div class="week">${week.map(d => { const k = dkey(d), today = k === dkey(); return `<div class="wd ${today ? 'is-today' : ''}">${today ? 'Today' : d.toLocaleDateString(undefined, { weekday: 'narrow' })}
-        <button class="${h.log[k] ? 'on' : ''}" data-a="toggleHabit" data-id="${h.id}" data-day="${k}" aria-label="${k}">${I.check}</button></div>`; }).join('')}</div>
-    </section>`;
-  }).join('') || `<div class="empty card"><div class="big">🌱</div><b>No habits yet</b>Tap + to start tracking one.</div>`}`;
+    <div class="ring-wrap">${ring(S.habits.length ? nDone / S.habits.length : 0, 72, 8)}<div class="ring-label"><div style="font-size:16px">${nDone}/${S.habits.length}</div></div></div>
+    <div class="today-stats"><div class="ts">${nDone === S.habits.length ? 'All done today 🎉' : 'Left today'}<b>${nDone === S.habits.length ? '' : S.habits.length - nDone}</b></div><div class="ts">Last 7 days<b>${wkPct}%</b></div><div class="ts">Longest streak<b>${Math.max(0, ...S.habits.map(streak))} 🔥</b></div></div>
+  </div></section>` : `<div class="empty card"><div class="big">🌱</div><b>No habits yet</b>Pick a few below or tap + to make your own.</div>`}
+  ${groups}
+  ${ideas.length ? `<div class="group-label">✨ Quick add</div>
+  <div class="chip-row" style="margin-top:0">${ideas.map(([x, i]) => `<button class="habit-chip idea" data-a="addIdea" data-i="${i}"><span>${x[0]}</span>${x[1]}</button>`).join('')}</div>` : ''}`;
 }
 
 let noteQuery = '';
@@ -770,6 +861,13 @@ function viewSettings() {
     <div class="swatches" style="padding-top:0">${Object.entries(ACCENTS).map(([k, c]) => `<button class="swatch ${S.accent === k ? 'on' : ''}" style="background:${c};color:${c}" data-a="setAccent" data-v="${k}" aria-label="${k}"></button>`).join('')}</div>
   </div>
 
+  <div class="settings-label">Home widgets</div>
+  <div class="list">
+    ${row('🏀', 'NBA scores', `<span class="toggle" style="margin-left:auto"><input type="checkbox" data-change="wNba" ${S.widgets.nba ? 'checked' : ''}><i></i></span>`)}
+    ${row('⭐', 'My team', `<select class="inline-select" data-change="team"><option value="">None</option>${NBA_TEAMS.map(t => `<option ${S.team === t ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
+    ${row('📺', 'Anime airing today', `<span class="toggle" style="margin-left:auto"><input type="checkbox" data-change="wAnime" ${S.widgets.anime ? 'checked' : ''}><i></i></span>`)}
+  </div>
+
   <div class="settings-label">Weather</div>
   <div class="list">
     ${row('📍', 'Location', `<span class="v">${S.location ? esc(S.location.name) : 'Not set'}</span>`)}
@@ -818,7 +916,7 @@ function render(animate = false) {
   v.innerHTML = (VIEWS[S.tab] || viewHome)();
   if (animate) { v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter'); scrollTo(0, 0); }
   else scrollTo(0, y);
-  renderTabs();
+  renderTabs(); loadWidgets();
 }
 function renderTabs() {
   const due = todayTasks().open.length;
@@ -917,11 +1015,17 @@ function taskSheet(t) {
 }
 
 function habitSheet(h) {
-  const isNew = !h; h = h || { name: '', emoji: HABIT_EMOJI[0] };
+  const isNew = !h; h = h || { name: '', emoji: HABIT_EMOJI[0], when: 'any', target: 1 };
   openSheet(`
   <form data-form="habit" data-id="${h.id || ''}" autocomplete="off">
     <div class="sheet-title">${isNew ? 'New habit' : 'Edit habit'}</div>
     <input class="input lg" name="name" value="${esc(h.name)}" placeholder="e.g. Meditate 10 min" required>
+    <label class="label">When</label>
+    <div class="chips" data-group="when">${Object.entries(WHEN).map(([k, [l, ic]]) => `<button type="button" class="chip ${(h.when || 'any') === k ? 'on' : ''}" data-a="pickChip" data-v="${k}">${ic} ${l}</button>`).join('')}</div>
+    <input type="hidden" name="when" value="${h.when || 'any'}">
+    <label class="label">Times per day</label>
+    <div class="chips" data-group="target">${[1, 2, 3, 4].map(n => `<button type="button" class="chip ${hTarget(h) === n ? 'on' : ''}" data-a="pickChip" data-v="${n}">${n}×</button>`).join('')}</div>
+    <input type="hidden" name="target" value="${hTarget(h)}">
     <label class="label">Icon</label>${emojiPicker(HABIT_EMOJI, h.emoji)}
     <div class="btn-row"><button class="btn">${isNew ? 'Create habit' : 'Save'}</button></div>
   </form>`, { onMount: el => isNew && setTimeout(() => $('[name=name]', el).focus(), 350) });
@@ -930,7 +1034,7 @@ function habitSheet(h) {
 function habitDetail(h) {
   const end = new Date(), weeks = 17;
   const start = addDays(end, -((weeks - 1) * 7 + end.getDay()));
-  const cells = []; for (let d = start; dkey(d) <= dkey(end); d = addDays(d, 1)) { const k = dkey(d); cells.push(`<i class="${h.log[k] ? 'on' : ''} ${k === dkey() ? 't' : ''}" title="${k}"></i>`); }
+  const cells = []; for (let d = start; dkey(d) <= dkey(end); d = addDays(d, 1)) { const k = dkey(d); cells.push(`<i class="${hDone(h, k) ? 'on' : hCount(h, k) ? 'part' : ''} ${k === dkey() ? 't' : ''}" title="${k}"></i>`); }
   openSheet(`
     <div class="habit-top" style="margin-bottom:16px"><div class="habit-emoji" style="width:52px;height:52px;font-size:26px">${h.emoji}</div>
       <div><div class="sheet-title" style="margin:0">${esc(h.name)}</div><div class="habit-sub">Since ${Object.keys(h.log).sort()[0] ? fmtDate(Object.keys(h.log).sort()[0]) : 'today'}</div></div></div>
@@ -1050,9 +1154,15 @@ const A = {
 
   toggleHabit: el => {
     const h = byId('habits', el.dataset.id), k = el.dataset.day; if (!h) return;
-    if (h.log[k]) delete h.log[k]; else { h.log[k] = true; navigator.vibrate?.(10); }
-    save(); el.classList.toggle('on', !!h.log[k]);
-    setTimeout(() => render(), 220);
+    const done = bumpHabit(h, k); if (hCount(h, k)) navigator.vibrate?.(10);
+    save(); el.classList.toggle('on', done);
+    const left = S.habits.filter(x => !hDone(x)).length;
+    if (done && k === dkey() && !left && S.habits.length > 1) toast('Every habit done today 🎉');
+    setTimeout(() => render(), 200);
+  },
+  addIdea: el => {
+    const [emoji, name, when, target] = HABIT_IDEAS[+el.dataset.i];
+    S.habits.push({ id: uid(), name, emoji, when, target, log: {} }); save(); render(); toast(`Added ${emoji} ${name}`);
   },
   addHabit: () => habitSheet(),
   editHabit: el => habitSheet(byId('habits', el.dataset.id)),
@@ -1138,8 +1248,8 @@ const FORMS = {
   },
   habit: f => {
     const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
-    if (id) Object.assign(byId('habits', id), { name: d.name.trim(), emoji: d.emoji || '✅' });
-    else S.habits.push({ id: uid(), name: d.name.trim(), emoji: d.emoji || '✅', log: {} });
+    const v = { name: d.name.trim(), emoji: d.emoji || '✅', when: d.when, target: +d.target || 1 };
+    if (id) Object.assign(byId('habits', id), v); else S.habits.push({ id: uid(), ...v, log: {} });
     save(); closeSheet(); render();
   },
   link: f => {
@@ -1167,6 +1277,9 @@ const INPUTS = {
   },
 };
 const CHANGES = {
+  wNba: el => { S.widgets.nba = el.checked; save(); },
+  wAnime: el => { S.widgets.anime = el.checked; save(); },
+  team: el => { S.team = el.value; save(); },
   name: el => { S.name = el.value.trim().slice(0, 24); save(); },
   focusMin: el => { S.focus.focusMin = Math.max(1, Math.min(180, +el.value || 25)); if (!S.focus.running && S.focus.mode === 'focus') S.focus.remaining = focusLen('focus'); save(); },
   breakMin: el => { S.focus.breakMin = Math.max(1, Math.min(60, +el.value || 5)); if (!S.focus.running && S.focus.mode === 'break') S.focus.remaining = focusLen('break'); save(); },
@@ -1205,7 +1318,7 @@ document.addEventListener('visibilitychange', () => {
   loadWeather(); syncNow();
 });
 addEventListener('online', syncNow);
-setInterval(() => document.visibilityState === 'visible' && syncNow(), 60e3);
+setInterval(() => document.visibilityState === 'visible' && (syncNow(), loadWidgets()), 60e3);
 
 /* =========================================================
    BOOT

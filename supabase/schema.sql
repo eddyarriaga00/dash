@@ -46,3 +46,28 @@ revoke execute on function public.dash_pull(text) from public;
 revoke execute on function public.dash_push(text, jsonb, bigint) from public;
 grant execute on function public.dash_pull(text) to anon, authenticated;
 grant execute on function public.dash_push(text, jsonb, bigint) to anon, authenticated;
+
+-- Work shifts pushed from an iPhone Shortcut (the phone's Calendar is the only
+-- thing that can read the work feed). Plain text, one shift per line:
+--   Title|2026-11-10T15:30:00-05:00|2026-11-10T20:30:00-05:00
+alter table public.dash_vaults add column if not exists shifts text;
+alter table public.dash_vaults add column if not exists shifts_at timestamptz;
+
+create or replace function public.dash_set_shifts(vault text, lines text)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  if char_length(vault) < 40 or char_length(coalesce(lines, '')) > 20000 then return false; end if;
+  update public.dash_vaults v set shifts = coalesce(lines, ''), shifts_at = now() where v.id = vault;
+  return found;
+end $$;
+
+create or replace function public.dash_shifts(vault text)
+returns table (lines text, at timestamptz)
+language sql stable security definer set search_path = public as $$
+  select v.shifts, v.shifts_at from public.dash_vaults v where v.id = vault and char_length(vault) >= 40;
+$$;
+
+revoke execute on function public.dash_set_shifts(text, text) from public;
+revoke execute on function public.dash_shifts(text) from public;
+grant execute on function public.dash_set_shifts(text, text) to anon, authenticated;
+grant execute on function public.dash_shifts(text) to anon, authenticated;

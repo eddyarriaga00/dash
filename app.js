@@ -572,32 +572,48 @@ function parseICS(txt) {
   }
   return out.sort((a, b) => a.start - b.start);
 }
+// Shifts come from a calendar link (S.calUrl) or, failing that, from the iPhone
+// Shortcut that posts lines of "Title|start ISO|end ISO" to this sync vault.
+const calSrc = () => S.calUrl ? 'ics:' + S.calUrl : SY.vault ? 'sc:' + SY.vault : '';
+function parseShiftLines(txt) {
+  return (txt || '').split(/\r?\n/).map(l => {
+    const [title, a, b] = l.split('|').map(x => x.trim()), start = Date.parse(a), end = Date.parse(b);
+    return isNaN(start) ? null : { title, start, end: isNaN(end) ? undefined : end, allDay: !isNaN(end) && end - start >= 864e5 - 6e4 };
+  }).filter(Boolean).sort((x, y) => x.start - y.start);
+}
 async function loadCal(force) {
-  if (!S.calUrl || calBusy) return;
-  if (!force && CAL.url === S.calUrl && Date.now() - CAL.ts < 30 * 60e3) return;
+  const src = calSrc(); if (!src || calBusy) return;
+  if (!force && CAL.url === src && Date.now() - CAL.ts < (S.calUrl ? 30 : 5) * 60e3) return;
   calBusy = true;
+  const from = parseKey(dkey()).getTime(), to = from + 28 * 864e5;
+  const keep = list => list.filter(e => (e.end || e.start) >= from && e.start < to).slice(0, 60);
   try {
-    const r = await proxy(`kind=ics&url=${encodeURIComponent(S.calUrl)}`);
-    if (!r.ok) throw new Error(r.status);
-    const from = parseKey(dkey()).getTime(), to = from + 28 * 864e5;
-    const events = parseICS(await r.text()).filter(e => (e.end || e.start) >= from && e.start < to).slice(0, 60);
-    CAL = { url: S.calUrl, ts: Date.now(), events, error: false };
-    if (force) toast(events.length ? `Calendar connected — ${events.length} upcoming` : 'Connected, but nothing upcoming');
+    if (S.calUrl) {
+      const r = await proxy(`kind=ics&url=${encodeURIComponent(S.calUrl)}`);
+      if (!r.ok) throw new Error(r.status);
+      CAL = { url: src, ts: Date.now(), events: keep(parseICS(await r.text())), error: false };
+      if (force) toast(CAL.events.length ? `Calendar connected — ${CAL.events.length} upcoming` : 'Connected, but nothing upcoming');
+    } else {
+      const [row] = await rpc('dash_shifts', { vault: SY.vault });
+      CAL = { url: src, ts: Date.now(), events: keep(parseShiftLines(row?.lines)), at: row?.at ? Date.parse(row.at) : 0, error: false };
+      if (force) toast(CAL.at ? `Shifts updated ${ago(CAL.at).toLowerCase()}` : 'Nothing received from your iPhone yet');
+    }
   } catch {
-    CAL = { ...CAL, url: S.calUrl, ts: Date.now(), error: true, events: CAL.url === S.calUrl ? CAL.events : [] };
-    if (force) toast('Couldn’t read that calendar link');
+    CAL = { ...CAL, url: src, ts: Date.now(), error: true, events: CAL.url === src ? CAL.events : [] };
+    if (force) toast(S.calUrl ? 'Couldn’t read that calendar link' : 'Couldn’t check for shifts');
   }
   try { localStorage.setItem('dash.cal', JSON.stringify(CAL)); } catch { }
   calBusy = false;
-  const el = $('#work'); if (el) el.outerHTML = workCard();
+  const el = $('#work'); if (el) el.outerHTML = workCard(); else if (S.tab === 'home' && workCard()) softRender();
 }
 const tm = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(':00', '').replace(/\s/g, ' ');
 const dur = ms => { const h = ms / 36e5; return h >= 1 ? `${+h.toFixed(1)}h` : `${Math.round(ms / 6e4)}m`; };
 function workCard() {
-  if (!S.calUrl) return '';
-  const now = Date.now(), evs = (CAL.url === S.calUrl && CAL.events || []).filter(e => (e.end || e.start + 36e5) > now);
+  const src = calSrc(), mine = CAL.url === src;
+  if (!src || (!S.calUrl && !(mine && CAL.at))) return '';
+  const now = Date.now(), evs = (mine && CAL.events || []).filter(e => (e.end || e.start + 36e5) > now);
   const head = secHead('💼 Work', evs.length ? `<span class="muted" style="font-size:13px;font-weight:600">${dur(evs.filter(e => e.start < now + 7 * 864e5 && !e.allDay).reduce((a, e) => a + ((e.end || e.start) - e.start), 0))} next 7 days</span>` : '');
-  if (!evs.length) return `<section class="card" id="work">${head}<div class="muted">${CAL.error ? 'Couldn’t load your schedule. The link may have expired — paste the new one in Settings.' : CAL.url === S.calUrl ? 'No shifts coming up 🎉' : 'Loading your schedule…'}</div></section>`;
+  if (!evs.length) return `<section class="card" id="work">${head}<div class="muted">${CAL.error && S.calUrl ? 'Couldn’t load your schedule from that link.' : mine ? `No shifts coming up 🎉${CAL.at && now - CAL.at > 3 * 864e5 ? ' (last update from your iPhone was ' + ago(CAL.at).toLowerCase() + ')' : ''}` : 'Loading your schedule…'}</div></section>`;
   const dayName = t => { const n = dayDiff(new Date(), new Date(t)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
   const range = e => e.allDay ? 'All day' : `${tm(e.start)} – ${tm(e.end || e.start)}`;
   const [n, ...rest] = evs, on = n.start <= now && !n.allDay;
@@ -968,9 +984,13 @@ function viewSettings() {
 
   <div class="settings-label">Work schedule</div>
   <div class="list">
-    ${row('💼', 'Status', `<span class="v">${!S.calUrl ? 'Not connected' : CAL.error ? 'Link not working' : `${(CAL.events || []).length} upcoming`}</span>`)}
-    <div class="pad" style="padding-bottom:8px"><input class="input" data-change="calUrl" value="${esc(S.calUrl || '')}" placeholder="Paste your calendar link (https:// or webcal://)" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
-    <div class="pad muted" style="font-size:13px;padding-top:0">On iPhone: Settings → Apps → Calendar → Calendar Accounts → Subscribed Calendars → your work calendar → copy the Server link, then paste it here. It’s kept in your private data, never in the app’s code.</div>
+    ${row('💼', 'Status', `<span class="v">${S.calUrl ? (CAL.error ? 'Link not working' : `${(CAL.events || []).length} upcoming`) : !SY.vault ? 'Needs cloud sync' : CAL.at ? `${(CAL.events || []).length} shifts · sent ${ago(CAL.at).toLowerCase()}` : 'Waiting for your iPhone'}</span>`)}
+    ${SY.vault ? `
+      ${row('📱', 'Set up iPhone Shortcut', `<span class="v">${I.chev}</span>`, 'shortcutHelp')}
+      ${row('🔄', 'Check for shifts now', `<span class="v">${I.chev}</span>`, 'checkShifts')}`
+    : `<div class="pad muted" style="font-size:14px">Turn on cloud sync above first. Then an iPhone Shortcut can send your shifts here from the Calendar app.</div>`}
+    <div class="pad" style="padding-bottom:8px"><input class="input" data-change="calUrl" value="${esc(S.calUrl || '')}" placeholder="Or paste a public calendar link" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+    <div class="pad muted" style="font-size:13px;padding-top:0">Links work for normal calendar feeds (school, Google, iCloud). Apple’s employee schedule blocks them, so use the Shortcut for that.</div>
   </div>
 
   <div class="settings-label">Weather</div>
@@ -1322,6 +1342,26 @@ const A = {
   },
   importData: () => $('#import-file').click(),
   enableSync: () => enableSync(),
+  checkShifts: () => { if (S.calUrl) return toast('Remove the calendar link first'); loadCal(true).then(() => S.tab === 'settings' && render()); },
+  copyVal: async el => { try { await navigator.clipboard.writeText(el.dataset.v); toast('Copied'); } catch { prompt('Copy this:', el.dataset.v); } },
+  shortcutHelp: () => {
+    const copy = (label, v) => `<button class="copy-row" data-a="copyVal" data-v="${esc(v)}"><small>${label}</small><code>${esc(v.length > 46 ? v.slice(0, 43) + '…' : v)}</code><span>Copy</span></button>`;
+    const step = (n, html) => `<div class="step"><b>${n}</b><div>${html}</div></div>`;
+    openSheet(`
+      <div class="sheet-title">Send shifts from your iPhone</div>
+      <p class="muted" style="margin-bottom:14px">Build this once in the <b>Shortcuts</b> app. It reads your work calendar and sends the next two weeks here.</p>
+      ${step(1, 'New Shortcut → add <b>Find Calendar Events</b>. Add filters: <b>Calendar is</b> your work calendar, and <b>Start Date is in the next 14 days</b>.')}
+      ${step(2, 'Add <b>Repeat with Each</b> (it uses the events). Inside it add a <b>Text</b> action with exactly:<br><code>Title|Start Date|End Date</code><br>Insert each as a variable from <b>Repeat Item</b>. Tap the Start Date and End Date variables and set <b>Date Format: ISO 8601</b> with <b>Include ISO 8601 Time</b> on.')}
+      ${step(3, 'After End Repeat add <b>Combine Text</b> (Repeat Results, with <b>New Lines</b>).')}
+      ${step(4, 'Add <b>Get Contents of URL</b> with this URL:')}
+      ${copy('URL', SB_URL + '/rest/v1/rpc/dash_set_shifts')}
+      ${step(5, 'Tap the arrow on that action: <b>Method POST</b>. Under <b>Headers</b> add <code>apikey</code> with this value:')}
+      ${copy('apikey', SB_KEY)}
+      ${step(6, '<b>Request Body: JSON</b>. Add two <b>Text</b> fields: <code>vault</code> with the value below, and <code>lines</code> set to the <b>Combined Text</b> variable.')}
+      ${copy('vault', SY.vault)}
+      ${step(7, 'Run it once, then tap <b>Check for shifts now</b> here. To keep it fresh: Shortcuts → Automation → <b>Time of Day</b>, daily, Run Immediately → this shortcut.')}
+      <div class="btn-row"><button class="btn" data-a="closeSheet">Done</button></div>`);
+  },
   syncNow: () => { SY.rev = -1; syncNow(); },
   shareCode: async () => {
     const text = SY.vault;

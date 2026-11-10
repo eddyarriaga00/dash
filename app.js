@@ -983,18 +983,93 @@ function workCard() {
 }
 // 7-day strip: shifts, days off and tasks due, at a glance.
 function weekCard() {
-  const all = shifts(); if (!all.length) return '';
+  const all = shifts();
   const days = Array.from({ length: 7 }, (_, i) => addDays(new Date(), i));
   let hrs = 0, count = 0;
   const cells = days.map((d, i) => {
     const k = dkey(d), sh = all.filter(e => !e.allDay && dkey(new Date(e.start)) === k), due = S.tasks.filter(t => !t.done && t.due === k).length;
     sh.forEach(e => { hrs += ((e.end || e.start) - e.start) / 36e5; count++; });
-    return `<div class="wkd ${i === 0 ? 't' : ''} ${sh.length ? 'has' : ''}"><small>${d.toLocaleDateString(undefined, { weekday: 'short' })}</small><b>${d.getDate()}</b>
+    return `<div class="wkd ${i === 0 ? 't' : ''} ${sh.length ? 'has' : ''}" data-a="openCal" data-k="${k}" style="cursor:pointer"><small>${d.toLocaleDateString(undefined, { weekday: 'short' })}</small><b>${d.getDate()}</b>
       ${sh.length ? `<span class="blk">${tshort(sh[0].start)}</span><span class="blk2">${tshort(sh[sh.length - 1].end || sh[0].start)}</span>` : '<span class="off">Off</span>'}
       ${due ? `<i>${due}</i>` : ''}</div>`;
   }).join('');
-  return `<section class="card" id="week">${secHead('Next 7 days', `<span class="muted" style="font-size:13px;font-weight:600">${count} shift${count === 1 ? '' : 's'} · ${+hrs.toFixed(1)}h</span>`)}<div class="wk">${cells}</div></section>`;
+  return `<section class="card" id="week">${secHead('Next 7 days', `<button class="link-btn" data-a="openCal">${count} shift${count === 1 ? '' : 's'} · ${+hrs.toFixed(1)}h · Calendar ›</button>`)}<div class="wk">${cells}</div></section>`;
 }
+/* ---------- full calendar: any month, everything Dash knows about each day ---------- */
+const calView = { ym: '', sel: '' };
+const ymOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+// Everything on each day of a date range, keyed by day.
+function dayItems(from, to) {
+  const out = {}, put = (k, x) => (out[k] = out[k] || []).push(x), inR = t => t >= from && t < to;
+  const shiftDays = new Set();
+  const addShiftItem = e => { const k = dkey(new Date(e.start)); if (shiftDays.has(k)) return; shiftDays.add(k);
+    put(k, { type: 'shift', icon: '💼', t: e.start, title: `${tm(e.start)} – ${tm(e.end || e.start)}`, sub: `${S.job || 'Work'} · ${dur((e.end || e.start) - e.start)}${S.rate ? ' · ' + money(paidHours(e.start, e.end || e.start) * S.rate) : ''}`, short: tshort(e.start), id: e.manual ? e.id : '' }); };
+  shifts().filter(e => !e.allDay && inR(e.start)).forEach(addShiftItem);
+  manualShifts().filter(e => inR(e.start)).forEach(addShiftItem);
+  for (const [k, h] of Object.entries(S.shiftLog || {})) { const t = Date.parse(k); if (inR(t)) addShiftItem({ start: t, end: t + h * 36e5 }); }
+  const seen = new Set();
+  if (!S.calUrl && CAL.url === calSrc()) for (const e of CAL.events || []) {
+    if (e.cal === S.workCal || !inR(e.start)) continue;
+    const key = (e.title || '').toLowerCase().replace(/[^a-z0-9]/g, '') + dkey(new Date(e.start)); if (seen.has(key)) continue; seen.add(key);
+    const t = `${e.title} ${e.cal}`.toLowerCase(); if (/pay\s*day/.test(t)) continue;
+    put(dkey(new Date(e.start)), { type: 'event', icon: /birthday|bday/.test(t) ? '🎂' : /holiday/.test(t) ? '🎉' : '📅', t: e.start, title: e.title, sub: e.allDay ? 'All day' : tm(e.start) + (e.end ? ' – ' + tm(e.end) : '') });
+  }
+  for (const t of S.tasks) if (t.due && inR(parseKey(t.due).getTime())) put(t.due, { type: 'task', icon: t.done ? '✅' : '☑️', t: 0, title: t.text, sub: t.done ? 'Done' : 'Task due', id: t.id, done: t.done });
+  const pd = nextPayday();
+  if (pd) for (let d = addDays(pd, -14 * Math.ceil(Math.max(0, dayDiff(new Date(from), pd)) / 14)); d.getTime() < to; d = addDays(d, 14)) if (inR(d.getTime())) {
+    const c = S.rate ? paychecks(d.getTime(), 1)[0] : null;
+    put(dkey(d), { type: 'pay', icon: '💵', t: 1, title: 'Payday', sub: c && c.gross ? `About ${money(c.gross)}${S.taxPct ? ' · ~' + money(takeHome(c.gross)) + ' take-home' : ''}` : 'Every two weeks' });
+  }
+  for (let d = new Date(from); d.getTime() < to; d = addDays(d, 1)) {
+    const k = dkey(d), last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    for (const b of S.bills || []) if (Math.min(b.day, last) === d.getDate()) put(k, { type: 'bill', icon: b.emoji || '🧾', t: 2, title: b.name, sub: `Bill due${b.amount ? ' · ' + money(b.amount) : ''}` });
+    for (const c of S.countdowns || []) if (c.date === k || (c.yearly && c.date.slice(5) === k.slice(5))) put(k, { type: 'cd', icon: c.emoji || '⏳', t: 3, title: c.title, sub: 'Countdown' });
+  }
+  for (const k in out) out[k].sort((a, b) => a.t - b.t);
+  return out;
+}
+function calBody() {
+  const today = dkey(), [y, m] = calView.ym.split('-').map(Number), first = new Date(y, m - 1, 1);
+  const start = addDays(first, -first.getDay()), weeks = Math.ceil((first.getDay() + new Date(y, m, 0).getDate()) / 7);
+  const items = dayItems(start.getTime(), addDays(start, weeks * 7).getTime());
+  let hrs = 0, n = 0;
+  const cells = Array.from({ length: weeks * 7 }, (_, i) => {
+    const d = addDays(start, i), k = dkey(d), it = items[k] || [], sh = it.find(x => x.type === 'shift'), out = d.getMonth() !== m - 1;
+    if (sh && !out) { n++; hrs += dayPaid(k) || 0; }
+    const dots = [...new Set(it.filter(x => x.type !== 'shift' && !x.done).map(x => x.type))].slice(0, 4);
+    return `<button class="cal-d ${out ? 'out' : ''} ${k === today ? 't' : ''} ${k === calView.sel ? 'sel' : ''} ${sh ? 'has' : ''}" data-a="calPick" data-k="${k}"><b>${d.getDate()}</b>${sh ? `<span>${sh.short}</span>` : '<span>&nbsp;</span>'}<em>${dots.map(t => `<i class="d-${t}"></i>`).join('')}</em></button>`;
+  }).join('');
+  const sel = calView.sel, list = items[sel] || [], sd = parseKey(sel), diff = dayDiff(new Date(), sd);
+  const label = diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : diff === -1 ? 'Yesterday' : sd.toLocaleDateString(undefined, { weekday: 'long' });
+  return `<div class="cal-nav"><button class="mv" data-a="calNav" data-n="-1" aria-label="Previous month">‹</button>
+      <b>${first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</b>
+      <button class="mv" data-a="calNav" data-n="1" aria-label="Next month">›</button></div>
+    <div class="cal-sum muted">${n ? `${n} shift${n === 1 ? '' : 's'}${hrs ? ` · ${+hrs.toFixed(1)}h${S.rate ? ' · ' + money(hrs * S.rate) : ''}` : ''}` : 'No shifts this month'}${calView.ym !== ymOf(new Date()) ? ` · <button class="link-btn" data-a="calToday">Back to today</button>` : ''}</div>
+    <div class="cal-w">${['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(x => `<small>${x}</small>`).join('')}</div>
+    <div class="cal-g" id="cal-g">${cells}</div>
+    <div class="cal-key"><span><i class="d-event"></i>Event</span><span><i class="d-task"></i>Task</span><span><i class="d-bill"></i>Bill</span><span><i class="d-pay"></i>Payday</span><span><i class="d-cd"></i>Countdown</span></div>
+    <div class="cal-day"><div class="sec-head" style="margin-top:14px"><h2>${label} <span class="muted" style="font-weight:500;font-size:14px">${sd.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span></h2>
+      <span style="display:flex;gap:14px"><button class="link-btn" data-a="calAddShift">+ Shift</button><button class="link-btn" data-a="calAddTask">+ Task</button></span></div>
+      ${list.length ? `<div class="stock-list">${list.map(x => `<div class="stock" ${x.type === 'shift' && x.id ? `data-a="editShift" data-id="${x.id}" style="cursor:pointer"` : x.type === 'task' ? `data-a="editTask" data-id="${x.id}" style="cursor:pointer"` : ''}>
+        <span style="font-size:22px">${x.icon}</span><div><b style="font-size:15px;${x.done ? 'text-decoration:line-through;opacity:.6' : ''}">${esc(x.title)}</b><small>${esc(x.sub)}</small></div></div>`).join('')}</div>`
+      : `<div class="muted" style="padding:6px 0 4px">Nothing on this day${diff >= 0 ? ' — a day off 🏖️' : ''}.</div>`}</div>`;
+}
+function calendarSheet(day) {
+  calView.sel = day || calView.sel || dkey(); calView.ym = calView.sel.slice(0, 7);
+  openSheet(`<div class="sheet-head"><div class="sheet-title" style="margin:0">Calendar</div><div class="spacer"></div><button class="ghost" data-a="closeSheet">Done</button></div>
+    <div id="calbody" style="overflow-y:auto;flex:1;margin:0 -4px;padding:0 4px">${calBody()}</div>`, { full: true, onMount: () => {
+    const el = $('#calbody'); if (!el) return; let x0 = null, y0 = 0;
+    el.addEventListener('touchstart', e => { const g = e.target.closest('#cal-g'); x0 = g ? e.touches[0].clientX : null; y0 = e.touches[0].clientY; }, { passive: true });
+    el.addEventListener('touchend', e => { if (x0 == null) return; const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) calShift(dx < 0 ? 1 : -1); }, { passive: true });
+  }, onClose: () => setTimeout(() => S.tab === 'home' && !$('#sheet-root').innerHTML && render(), 0) });
+}
+function calRedraw() { const el = $('#calbody'); if (el) el.innerHTML = calBody(); }
+function calShift(n) {
+  const [y, m] = calView.ym.split('-').map(Number), d = new Date(y, m - 1 + n, 1);
+  calView.ym = ymOf(d); calView.sel = calView.ym === ymOf(new Date()) ? dkey() : dkey(d); calRedraw();
+}
+
 function payCard() {
   if (!S.rate) return '';
   const ws = weekStart(), cur = weekPay(ws), next = weekPay(addDays(new Date(ws), 7).getTime()), pd = nextPayday();
@@ -1381,7 +1456,7 @@ function agendaCard() {
     rows.push({ ...e, icon: /pay\s*day/.test(t) ? '💵' : /birthday|bday/.test(t) ? '🎂' : /holiday/.test(t) ? '🎉' : '📅' });
   }
   if (!rows.length) return '';
-  return `<section class="card" id="agenda">${secHead('📅 Coming up')}
+  return `<section class="card" id="agenda">${secHead('📅 Coming up', `<button class="link-btn" data-a="openCal">Calendar ›</button>`)}
     <div class="stock-list">${rows.slice(0, 6).map(e => { const n = dayDiff(new Date(), new Date(e.start)); return `<div class="stock">
       <span style="font-size:22px">${e.icon}</span><div><b style="font-size:15px">${esc(e.title)}</b><small>${new Date(e.start).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}${e.allDay || e.icon === '💵' ? '' : ' · ' + tm(e.start)}</small></div>
       <span class="pill ${n <= 1 ? 'live' : ''}">${n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : `in ${n}d`}</span></div>`; }).join('')}</div>
@@ -1820,7 +1895,7 @@ function removeWithUndo(listName, id, label) {
 
 /* ---------- sheet forms ---------- */
 function taskSheet(t) {
-  const isNew = !t;
+  const isNew = !t || !t.id;
   t = t || { text: '', due: S.taskFilter === 'today' || S.tab === 'home' ? dkey() : '', priority: 0, tag: S.tab === 'tasks' ? S.tagFilter : '' };
   const opts = [['', 'No date'], [dkey(), 'Today'], [dkey(addDays(new Date(), 1)), 'Tomorrow'], [dkey(addDays(new Date(), 7)), 'Next week']];
   openSheet(`
@@ -1958,7 +2033,7 @@ function noteSheet(id) {
 }
 
 function shiftSheet(x) {
-  const isNew = !x; x = x || { start: `${dkey()}T09:00`, end: `${dkey()}T17:00` };
+  const isNew = !x || !x.id; x = x || { start: `${dkey()}T09:00`, end: `${dkey()}T17:00` };
   openSheet(`
   <form data-form="shift" data-id="${x.id || ''}" autocomplete="off">
     <div class="sheet-title">${isNew ? 'Add a shift' : 'Edit shift'}</div>
@@ -2055,6 +2130,12 @@ const A = {
   editLink: el => linkSheet(byId('links', el.dataset.id)),
   deleteLink: el => removeWithUndo('links', el.dataset.id, 'Link'),
   addCountdown: () => countdownSheet(),
+  openCal: el => calendarSheet(el.dataset.k || dkey()),
+  calNav: el => calShift(+el.dataset.n),
+  calPick: el => { calView.sel = el.dataset.k; calView.ym = calView.sel.slice(0, 7); calRedraw(); },
+  calToday: () => { calView.sel = dkey(); calView.ym = calView.sel.slice(0, 7); calRedraw(); },
+  calAddShift: () => shiftSheet({ start: `${calView.sel}T09:00`, end: `${calView.sel}T17:00` }),
+  calAddTask: () => taskSheet({ text: '', due: calView.sel, priority: 0, tag: '' }),
   addPlace: () => placeSheet(),
   editPlace: el => placeSheet(allPlaces().find(x => x.id === el.dataset.id)),
   deletePlace: el => { const id = el.dataset.id; if (S.from === id) S.from = 'home'; closeSheet(); removeWithUndo('places', id, 'Place'); },

@@ -70,7 +70,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '',
+  widgets: { nba: true, anime: true }, team: '', calUrl: '', stocks: 'SPY, AAPL, NVDA',
   notes: [],
   links: [
     { id: uid(), title: 'Calendar', url: 'https://calendar.google.com', emoji: '📅' },
@@ -546,7 +546,101 @@ function animeCard() {
         <span class="d">Ep ${x.episode} · ${x.airingAt < now ? 'Out now' : new Date(x.airingAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></a>`).join('')}</div>`}
   </section>`;
 }
-const loadWidgets = () => { if (S.tab === 'home') { loadNBA(); loadAnime(); } };
+/* ---------- work schedule (calendar feed) + stocks, via the dash-proxy edge function ---------- */
+const proxy = q => fetch(`${SB_URL}/functions/v1/dash-proxy?${q}`, { headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` } });
+let CAL = (() => { try { return JSON.parse(localStorage.getItem('dash.cal')) || {}; } catch { return {}; } })();
+let calBusy = false;
+function parseICS(txt) {
+  const un = v => v.replace(/\\n/gi, ' ').replace(/\\([,;\\])/g, '$1').trim();
+  const when = v => {
+    const m = v.match(/^(\d{4})(\d\d)(\d\d)(?:T(\d\d)(\d\d)(\d\d)?(Z)?)?/); if (!m) return null;
+    if (!m[4]) return { t: new Date(+m[1], m[2] - 1, +m[3]).getTime(), allDay: true };
+    return { t: m[7] ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5]) : new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5]).getTime() };
+  };
+  const out = []; let e = null;
+  for (const ln of txt.replace(/\r?\n[ \t]/g, '').split(/\r?\n/)) {
+    if (ln === 'BEGIN:VEVENT') e = {};
+    else if (ln === 'END:VEVENT') { if (e && e.start) out.push(e); e = null; }
+    else if (e) {
+      const i = ln.indexOf(':'); if (i < 0) continue;
+      const name = ln.slice(0, i).split(';')[0], v = ln.slice(i + 1);
+      if (name === 'SUMMARY') e.title = un(v);
+      else if (name === 'LOCATION') e.loc = un(v);
+      else if (name === 'DTSTART') { const r = when(v); if (r) { e.start = r.t; e.allDay = !!r.allDay; } }
+      else if (name === 'DTEND') e.end = when(v)?.t;
+    }
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+async function loadCal(force) {
+  if (!S.calUrl || calBusy) return;
+  if (!force && CAL.url === S.calUrl && Date.now() - CAL.ts < 30 * 60e3) return;
+  calBusy = true;
+  try {
+    const r = await proxy(`kind=ics&url=${encodeURIComponent(S.calUrl)}`);
+    if (!r.ok) throw new Error(r.status);
+    const from = parseKey(dkey()).getTime(), to = from + 28 * 864e5;
+    const events = parseICS(await r.text()).filter(e => (e.end || e.start) >= from && e.start < to).slice(0, 60);
+    CAL = { url: S.calUrl, ts: Date.now(), events, error: false };
+    if (force) toast(events.length ? `Calendar connected — ${events.length} upcoming` : 'Connected, but nothing upcoming');
+  } catch {
+    CAL = { ...CAL, url: S.calUrl, ts: Date.now(), error: true, events: CAL.url === S.calUrl ? CAL.events : [] };
+    if (force) toast('Couldn’t read that calendar link');
+  }
+  try { localStorage.setItem('dash.cal', JSON.stringify(CAL)); } catch { }
+  calBusy = false;
+  const el = $('#work'); if (el) el.outerHTML = workCard();
+}
+const tm = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(':00', '').replace(/\s/g, ' ');
+const dur = ms => { const h = ms / 36e5; return h >= 1 ? `${+h.toFixed(1)}h` : `${Math.round(ms / 6e4)}m`; };
+function workCard() {
+  if (!S.calUrl) return '';
+  const now = Date.now(), evs = (CAL.url === S.calUrl && CAL.events || []).filter(e => (e.end || e.start + 36e5) > now);
+  const head = secHead('💼 Work', evs.length ? `<span class="muted" style="font-size:13px;font-weight:600">${dur(evs.filter(e => e.start < now + 7 * 864e5 && !e.allDay).reduce((a, e) => a + ((e.end || e.start) - e.start), 0))} next 7 days</span>` : '');
+  if (!evs.length) return `<section class="card" id="work">${head}<div class="muted">${CAL.error ? 'Couldn’t load your schedule. The link may have expired — paste the new one in Settings.' : CAL.url === S.calUrl ? 'No shifts coming up 🎉' : 'Loading your schedule…'}</div></section>`;
+  const dayName = t => { const n = dayDiff(new Date(), new Date(t)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
+  const range = e => e.allDay ? 'All day' : `${tm(e.start)} – ${tm(e.end || e.start)}`;
+  const [n, ...rest] = evs, on = n.start <= now && !n.allDay;
+  const status = n.allDay ? dayName(n.start) : on ? `On shift · ${dur(n.end - now)} left` : n.start - now < 864e5 ? `Starts in ${dur(n.start - now)}` : dayName(n.start);
+  return `<section class="card" id="work">${head}
+    <div class="shift ${on ? 'on' : ''}">
+      <div class="shift-when"><b>${dayName(n.start)}</b><span>${range(n)}</span></div>
+      <div class="shift-meta"><span class="pill ${on ? 'live' : ''}">${status}</span><span class="muted">${esc(n.loc || n.title || '')}${!n.allDay && n.end ? ` · ${dur(n.end - n.start)}` : ''}</span></div>
+      ${on ? `<div class="progress" style="margin:12px 0 0"><i style="width:${Math.min(100, (now - n.start) / (n.end - n.start) * 100)}%"></i></div>` : ''}
+    </div>
+    ${rest.length ? `<div class="shift-list">${rest.slice(0, 5).map(e => `<div class="shift-row"><b>${dayName(e.start)}</b><span>${range(e)}</span><span class="muted">${e.allDay || !e.end ? esc(e.title || '') : dur(e.end - e.start)}</span></div>`).join('')}</div>` : ''}
+  </section>`;
+}
+
+let STK = { ts: 0, key: '', quotes: null };
+const stockList = () => (S.stocks || '').split(/[\s,]+/).map(x => x.trim().toUpperCase()).filter(Boolean).slice(0, 12);
+async function loadStocks(force) {
+  const syms = stockList(), key = syms.join(',');
+  if (!syms.length || (!force && STK.key === key && Date.now() - STK.ts < 60e3)) return;
+  STK.ts = Date.now(); STK.key = key;
+  try { STK.quotes = (await (await proxy(`kind=quotes&symbols=${encodeURIComponent(key)}`)).json()).quotes; }
+  catch { STK.quotes = STK.quotes || []; }
+  const el = $('#stocks'); if (el) el.outerHTML = stocksCard();
+}
+function spark(vals, up) {
+  if (!vals || vals.length < 2) return '';
+  const lo = Math.min(...vals), hi = Math.max(...vals), sp = hi - lo || 1;
+  const pts = vals.map((v, i) => `${(i / (vals.length - 1) * 70).toFixed(1)},${(26 - (v - lo) / sp * 24).toFixed(1)}`).join(' ');
+  return `<svg class="spark" viewBox="0 0 70 28" width="70" height="28"><polyline points="${pts}" fill="none" stroke="${up ? 'var(--ok)' : 'var(--danger)'}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/></svg>`;
+}
+function stocksCard() {
+  if (!stockList().length) return '';
+  const q = STK.key === stockList().join(',') ? STK.quotes : null;
+  return `<section class="card" id="stocks">
+    ${secHead('📈 Watchlist', `<button class="link-btn" data-a="goSettings">Edit</button>`)}
+    ${!q ? '<div class="muted">Loading quotes…</div>' : `<div class="stock-list">${q.map(x => {
+      if (x.error || x.price == null) return `<div class="stock"><div><b>${esc(x.symbol)}</b><small>Not found</small></div></div>`;
+      const ch = x.prev ? (x.price - x.prev) / x.prev * 100 : 0, up = ch >= 0;
+      return `<div class="stock"><div><b>${esc(x.symbol)}</b><small>${esc(x.name || '')}</small></div>${spark(x.spark, up)}
+        <div class="px"><b>${x.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b><span class="chg ${up ? 'up' : 'down'}">${up ? '+' : ''}${ch.toFixed(2)}%</span></div></div>`; }).join('')}</div>`}
+  </section>`;
+}
+const loadWidgets = () => { if (S.tab === 'home') { loadNBA(); loadAnime(); loadCal(); loadStocks(); } };
 
 /* =========================================================
    FOCUS TIMER
@@ -658,6 +752,8 @@ function viewHome() {
 
   ${weatherCard()}
 
+  ${workCard()}
+
   <section class="card">
     <div class="today">
       <div class="ring-wrap">${ring(pct)}<div class="ring-label"><div>${Math.round(pct * 100)}%<small>today</small></div></div></div>
@@ -685,6 +781,7 @@ function viewHome() {
 
   ${nbaCard()}
   ${animeCard()}
+  ${stocksCard()}
 
   <section class="card">
     ${secHead('Quick links', `<button class="link-btn" data-a="goSettings">Edit</button>`)}
@@ -866,6 +963,14 @@ function viewSettings() {
     ${row('🏀', 'NBA scores', `<span class="toggle" style="margin-left:auto"><input type="checkbox" data-change="wNba" ${S.widgets.nba ? 'checked' : ''}><i></i></span>`)}
     ${row('⭐', 'My team', `<select class="inline-select" data-change="team"><option value="">None</option>${NBA_TEAMS.map(t => `<option ${S.team === t ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
     ${row('📺', 'Anime airing today', `<span class="toggle" style="margin-left:auto"><input type="checkbox" data-change="wAnime" ${S.widgets.anime ? 'checked' : ''}><i></i></span>`)}
+    ${row('📈', 'Stocks', `<input class="inline" data-change="stocks" value="${esc(S.stocks || '')}" placeholder="SPY, AAPL" autocapitalize="characters" autocorrect="off" spellcheck="false">`)}
+  </div>
+
+  <div class="settings-label">Work schedule</div>
+  <div class="list">
+    ${row('💼', 'Status', `<span class="v">${!S.calUrl ? 'Not connected' : CAL.error ? 'Link not working' : `${(CAL.events || []).length} upcoming`}</span>`)}
+    <div class="pad" style="padding-bottom:8px"><input class="input" data-change="calUrl" value="${esc(S.calUrl || '')}" placeholder="Paste your calendar link (https:// or webcal://)" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+    <div class="pad muted" style="font-size:13px;padding-top:0">On iPhone: Settings → Apps → Calendar → Calendar Accounts → Subscribed Calendars → your work calendar → copy the Server link, then paste it here. It’s kept in your private data, never in the app’s code.</div>
   </div>
 
   <div class="settings-label">Weather</div>
@@ -1280,6 +1385,13 @@ const CHANGES = {
   wNba: el => { S.widgets.nba = el.checked; save(); },
   wAnime: el => { S.widgets.anime = el.checked; save(); },
   team: el => { S.team = el.value; save(); },
+  stocks: el => { S.stocks = el.value; S.stocks = stockList().join(', '); el.value = S.stocks; save(); },
+  calUrl: el => {
+    const v = el.value.trim();
+    if (v && !/^(https|webcal):\/\//i.test(v)) return toast('That doesn’t look like a calendar link');
+    S.calUrl = v; save(); CAL = {}; try { localStorage.removeItem('dash.cal'); } catch { }
+    if (v) loadCal(true).then(() => S.tab === 'settings' && render()); else render();
+  },
   name: el => { S.name = el.value.trim().slice(0, 24); save(); },
   focusMin: el => { S.focus.focusMin = Math.max(1, Math.min(180, +el.value || 25)); if (!S.focus.running && S.focus.mode === 'focus') S.focus.remaining = focusLen('focus'); save(); },
   breakMin: el => { S.focus.breakMin = Math.max(1, Math.min(60, +el.value || 5)); if (!S.focus.running && S.focus.mode === 'break') S.focus.remaining = focusLen('break'); save(); },

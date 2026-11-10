@@ -4,7 +4,7 @@ A personal dashboard built as an installable phone web app (PWA). It has no buil
 
 **Live:** https://eddyarriaga00.github.io/dash/
 
-**Features:** cloud sync across devices (Supabase) · live weather with hourly and 7-day forecasts (Open-Meteo) · daily progress ring · today's intention · tasks with due dates, priorities and repeats (quick-add understands `tmr`, `today`, `daily`, `weekly`, `!`, `!!`), plus swipe right to complete and swipe left to delete · daily mood check-in · habit tracker grouped by morning / anytime / evening, with times-per-day goals (e.g. brush teeth 2×), one-tap habit ideas, streaks and a heatmap · live NBA scores (ESPN) and today's anime airings (AniList) · notes with search and pinning · quick links · focus/break timer · water tracker · countdowns (one-off or yearly) · dark/light/auto theme with 8 accent colors · JSON backup export/import · works offline.
+**Features:** cloud sync across devices (Supabase) · live weather with hourly and 7-day forecasts (Open-Meteo) · daily progress ring · today's intention · tasks with due dates, priorities and repeats (quick-add understands `tmr`, `today`, `daily`, `weekly`, `!`, `!!`), plus swipe right to complete and swipe left to delete · daily mood check-in · habit tracker grouped by morning / anytime / evening, with times-per-day goals (e.g. brush teeth 2×), one-tap habit ideas, streaks and a heatmap · live NBA scores (ESPN) and today's anime airings (AniList) · work-schedule card from any calendar feed link · stock watchlist with sparklines · notes with search and pinning · quick links · focus/break timer · water tracker · countdowns (one-off or yearly) · dark/light/auto theme with 8 accent colors · JSON backup export/import · works offline.
 
 Your data is saved on the device first, so the app works offline. **Cloud sync** is optional: tap **Settings → Turn on cloud sync** to get a private sync code. On your other devices, paste that code into **Settings**, or use **Share code** to AirDrop it. Changes from every device are merged, and deletions are kept.
 
@@ -12,6 +12,7 @@ Your data is saved on the device first, so the app works offline. **Cloud sync**
 - Supabase project `dash` (org *delamain*); the schema is in [`supabase/schema.sql`](supabase/schema.sql).
 - The table is locked (RLS on, no grants). The browser can only call `dash_pull` / `dash_push`, and both need the 53-character random code.
 - Writes check a revision number. If two devices write at the same time, the app pulls, merges and retries.
+- The `dash-proxy` edge function ([source](supabase/functions/dash-proxy/index.ts)) fetches calendar feeds and stock quotes for the page. It only talks to known calendar hosts and Yahoo Finance.
 - Only the *publishable* key is in `app.js`, which is safe to make public. Treat your sync code like a password.
 
 ## Deploy to GitHub Pages

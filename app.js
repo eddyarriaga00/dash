@@ -52,7 +52,7 @@ const WHEN = { am: ['Morning', '🌅'], any: ['Anytime', '☀️'], pm: ['Evenin
 const HABIT_IDEAS = [
   ['💊', 'Take medicine', 'am', 1], ['🚿', 'Shower', 'am', 1], ['🦷', 'Brush teeth', 'am', 2], ['🛏️', 'Make bed', 'am', 1],
   ['🧴', 'Skincare', 'pm', 1], ['💪', 'Workout', 'any', 1], ['🚶', 'Walk', 'any', 1], ['🧘', 'Meditate', 'any', 1],
-  ['📖', 'Study', 'any', 1], ['💻', 'Code', 'any', 1], ['📚', 'Read', 'pm', 1], ['🥗', 'Eat a real meal', 'any', 3],
+  ['📖', 'Study', 'any', 1], ['💻', 'Code', 'any', 1], ['🏋️', 'Gym 3× a week', 'any', 1, 3], ['🧺', 'Laundry', 'any', 1, 1], ['🛒', 'Meal prep', 'any', 1, 1], ['📚', 'Read', 'pm', 1], ['🥗', 'Eat a real meal', 'any', 3],
   ['🧹', 'Tidy up', 'any', 1], ['✍️', 'Journal', 'pm', 1], ['📵', 'No phone in bed', 'pm', 1], ['😴', 'In bed on time', 'pm', 1],
   ['🦷', 'Floss', 'pm', 1], ['💊', 'Vitamins', 'am', 1], ['☀️', 'Get outside', 'any', 1], ['📞', 'Call family', 'any', 1],
 ];
@@ -71,7 +71,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], tags: ['School', 'Work', 'Personal', 'Errands'], tagFilter: '', spend: [], layout: null, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
+  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], budgets: {}, tags: ['School', 'Work', 'Personal', 'Errands'], tagFilter: '', spend: [], layout: null, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
   kit: 'Badge, Water bottle, Lunch, Charger, Headphones', kitDone: { date: '', items: [] }, bills: [], billPaid: {},
   stocks: 'SPY, AAPL, NVDA',
   notes: [],
@@ -445,15 +445,38 @@ function bumpHabit(h, k) {
   return hDone(h, k);
 }
 function streak(h) {
+  if (isWeekly(h)) {
+    let w = new Date(weekStart()); if (!weekMet(h, w)) w = addDays(w, -7);
+    let n = 0; while (n < 260 && weekMet(h, w)) { n++; w = addDays(w, -7); }
+    return n;
+  }
   let d = new Date(); if (!hDone(h, dkey(d))) d = addDays(d, -1);
   let n = 0; while (hDone(h, dkey(d))) { n++; d = addDays(d, -1); }
   return n;
 }
 function bestStreak(h) {
+  if (isWeekly(h)) {
+    let best = 0, cur = 0, w = new Date(weekStart(addDays(new Date(), -364)));
+    for (let i = 0; i < 53; i++, w = addDays(w, 7)) { cur = weekMet(h, w) ? cur + 1 : 0; best = Math.max(best, cur); }
+    return best;
+  }
   const keys = Object.keys(h.log).filter(k => hDone(h, k)).sort();
   let best = 0, cur = 0, prev = null;
   for (const k of keys) { cur = prev && dayDiff(parseKey(prev), parseKey(k)) === 1 ? cur + 1 : 1; best = Math.max(best, cur); prev = k; }
   return best;
+}
+// Habits can be daily, or "N times a week" (Sun–Sat weeks).
+const isWeekly = h => h.per === 'week';
+const weekGoal = h => Math.min(6, Math.max(1, h.weekGoal || 3));
+const weekDone = (h, ref = new Date()) => { const a = weekStart(ref); let n = 0; for (let i = 0; i < 7; i++) if (hDone(h, dkey(addDays(new Date(a), i)))) n++; return n; };
+const weekMet = (h, ref = new Date()) => weekDone(h, ref) >= weekGoal(h);
+// "Settled for today": a daily habit done today, or a weekly habit done today / already at its goal this week.
+const hOk = h => isWeekly(h) ? hDone(h) || weekMet(h) : hDone(h);
+// Habit strength (like Loop Habit Tracker): a slow average of recent days, so one missed day barely dents it.
+function strength(h) {
+  const f = isWeekly(h) ? weekGoal(h) / 7 : 1, a = 0.06; let x = 0;
+  for (let i = 89; i >= 0; i--) { const k = dkey(addDays(new Date(), -i)); if (i === 0 && !hDone(h, k)) break; x = (1 - a) * x + a * (hDone(h, k) ? 1 : 0); }
+  return Math.min(100, Math.round(x / f * 100));
 }
 const rate = (h, days = 30) => { let n = 0; for (let i = 0; i < days; i++) if (hDone(h, dkey(addDays(new Date(), -i)))) n++; return Math.round(n / days * 100); };
 
@@ -1024,7 +1047,7 @@ function viewHome() {
   const now = new Date(), h = now.getHours(), t = dkey();
   const greet = h < 5 ? 'Up late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 22 ? 'Good evening' : 'Good night';
   const tt = todayTasks();
-  const nDone = S.habits.filter(x => hDone(x, t)).length;
+  const nDone = S.habits.filter(hOk).length;
   const total = tt.total + S.habits.length, done = tt.done.length + nDone;
   const pct = total ? done / total : 0;
   const sessions = S.focus.sessions[t] || 0;
@@ -1131,7 +1154,7 @@ function brief() {
   if (sh && dkey(new Date(sh.start)) === dkey()) out.push(['home', sh.start <= now ? `💼 On shift till ${tm(sh.end)}` : `💼 Work ${tm(sh.start)}${S.commute ? ` · leave ${tm(sh.start - S.commute * 6e4)}` : ''}`]);
   else if (all.length) out.push(['home', '🏖️ No shift today']);
   const due = todayTasks().open.length; if (due) out.push(['tasks', `✅ ${due} task${due === 1 ? '' : 's'} due`]);
-  if (S.habits.length) { const left = S.habits.filter(h => !hDone(h)).length; out.push(['habits', left ? `🔥 ${left} habit${left === 1 ? '' : 's'} left` : '🔥 Habits done']); }
+  if (S.habits.length) { const left = S.habits.filter(h => !hOk(h)).length; out.push(['habits', left ? `🔥 ${left} habit${left === 1 ? '' : 's'} left` : '🔥 Habits done']); }
   const bill = (S.bills || []).map(b => ({ b, d: billDue(b).days })).filter(x => x.d <= 3).sort((x, y) => x.d - y.d)[0];
   if (bill) out.push(['money', `🧾 ${esc(bill.b.name)} ${bill.d < 0 ? 'overdue' : bill.d === 0 ? 'due today' : `due in ${bill.d}d`}`]);
   const pd = nextPayday(); if (pd && dayDiff(new Date(), pd) <= 2) out.push(['money', `💵 Payday ${dayDiff(new Date(), pd) === 0 ? 'today' : dayDiff(new Date(), pd) === 1 ? 'tomorrow' : 'in 2d'}`]);
@@ -1149,8 +1172,9 @@ function viewMoney() {
     <div><b style="font-size:15px">${c.date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</b><small>${fmt(c.from)} – ${fmt(c.to)} · ${+c.h.toFixed(1)}h</small></div>
     <div class="px"><b>${money(c.gross)}</b>${S.taxPct ? `<small>~${money(takeHome(c.gross))} net</small>` : ''}</div></div>`).join('')}</div></section>` : ''}
   ${spendCard()}
+  ${budgetCard()}
   ${list.length > 3 ? `<section class="card">${secHead(d.toLocaleDateString(undefined, { month: 'long' }) + ' spending', `<span class="muted" style="font-size:14px;font-weight:650">${money(list.reduce((t, x) => t + x.amt, 0))}</span>`)}
-    <div class="shift-list" style="margin:0">${list.slice(0, 30).map(x => `<div class="shift-row" data-a="delSpend" data-id="${x.id}" style="cursor:pointer;grid-template-columns:1fr auto auto"><b>${esc(x.note || 'Expense')}</b><span class="muted" style="font-size:13px">${fmt(x.ts)}</span><span>$${(+x.amt).toFixed(2)}</span></div>`).join('')}</div></section>` : ''}
+    <div class="shift-list" style="margin:0">${list.slice(0, 30).map(x => `<div class="shift-row" data-a="delSpend" data-id="${x.id}" style="cursor:pointer;grid-template-columns:1fr auto auto"><b>${catIcon(x.cat || guessCat(x.note))} ${esc(x.note || 'Expense')}</b><span class="muted" style="font-size:13px">${fmt(x.ts)}</span><span>$${(+x.amt).toFixed(2)}</span></div>`).join('')}</div></section>` : ''}
   ${billsCard() || `<section class="card">${secHead('🧾 Bills', `<button class="link-btn" data-a="addBill">Add</button>`)}<div class="muted">Add rent, phone or subscriptions and Dash tracks what’s due next.</div></section>`}
   ${stocksCard()}`;
 }
@@ -1228,6 +1252,42 @@ function agendaCard() {
 }
 
 /* ---------- spending: quick log, compared with what you're earning this week ---------- */
+const SPEND_CATS = [['Food', '🍔'], ['Gas', '⛽'], ['Shopping', '🛍️'], ['Fun', '🎮'], ['Bills', '🧾'], ['Other', '💸']];
+const catIcon = c => (SPEND_CATS.find(x => x[0] === c) || SPEND_CATS[5])[1];
+// Guess a category from what you typed, so most entries need no extra tap.
+function guessCat(note) {
+  const n = (note || '').toLowerCase();
+  if (/food|lunch|dinner|breakfast|coffee|mcdonald|chick|subway|taco|wendy|bojang|cane|crumbl|chipotle|pizza|uber ?eats|doordash|grocer|starbucks|snack|drink/.test(n)) return 'Food';
+  if (/gas|fuel|shell|exxon|bp\b|sheetz|wawa|speedway|car ?wash|parking|toll|uber\b|lyft/.test(n)) return 'Gas';
+  if (/movie|amc|santikos|steam|game|psn|playstation|xbox|nintendo|twitch|concert|ticket|card|pok[eé]mon|one piece|bowling/.test(n)) return 'Fun';
+  if (/amazon|tiktok|target|walmart|shop|clothes|shoes|nike|best ?buy|apple store/.test(n)) return 'Shopping';
+  if (/bill|rent|phone|t-?mobile|insurance|subscription|spotify|netflix|hulu|apple ?care|klarna|afterpay|sezzle|affirm|loan/.test(n)) return 'Bills';
+  return 'Other';
+}
+const monthStart = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+function budgetCard() {
+  const d = new Date(), ms = monthStart(d), me = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime(), B = S.budgets || {};
+  const by = {}; (S.spend || []).filter(x => x.ts >= ms && x.ts < me).forEach(x => { const c = x.cat || guessCat(x.note); by[c] = (by[c] || 0) + (+x.amt || 0); });
+  const cats = SPEND_CATS.filter(([c]) => by[c] || B[c]);
+  const daysLeft = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() - d.getDate() + 1;
+  const total = Object.values(by).reduce((a, b) => a + b, 0), totalB = Object.values(B).reduce((a, b) => a + (+b || 0), 0);
+  return `<section class="card" id="budgets">${secHead(`📊 ${d.toLocaleDateString(undefined, { month: 'long' })} budget`, `<button class="link-btn" data-a="editBudgets">${totalB ? 'Edit' : 'Set budgets'}</button>`)}
+    ${totalB ? `<div class="shift-meta" style="margin:0 0 12px"><span class="muted">${money(total)} of ${money(totalB)} · ${daysLeft} day${daysLeft === 1 ? '' : 's'} left${totalB > total ? ` · ${money((totalB - total) / daysLeft)}/day to stay on track` : ''}</span></div>` : ''}
+    ${cats.length ? `<div class="bud-list">${cats.map(([c, ic]) => { const spent = by[c] || 0, lim = +B[c] || 0, pc = lim ? spent / lim : 0; return `<div class="bud">
+      <div class="bud-top"><span>${ic} ${c}</span><span><b>${money(spent)}</b>${lim ? `<span class="muted"> / ${money(lim)}</span>` : ''}</span></div>
+      ${lim ? `<div class="progress" style="margin:6px 0 0"><i style="width:${Math.min(100, pc * 100)}%;${pc > 1 ? 'background:var(--danger)' : pc > .85 ? 'background:var(--warn)' : ''}"></i></div>` : ''}</div>`; }).join('')}</div>`
+    : `<div class="muted">Log spending and it’s sorted into Food, Gas, Fun and more. Set a monthly limit for each to see how you’re doing.</div>`}
+  </section>`;
+}
+function budgetSheet() {
+  const B = S.budgets || {};
+  openSheet(`<form data-form="budgets" autocomplete="off">
+    <div class="sheet-title">Monthly budgets</div>
+    <p class="muted" style="font-size:13px;margin-bottom:6px">Leave a category empty for no limit.</p>
+    <div class="list" style="box-shadow:none">${SPEND_CATS.map(([c, ic]) => `<label class="row"><span class="ic">${ic}</span><span class="row-title">${c}</span>
+      <input class="inline num" type="number" inputmode="decimal" min="0" step="1" name="${c}" value="${B[c] || ''}" placeholder="$" style="width:90px"></label>`).join('')}</div>
+    <div class="btn-row"><button class="btn">Save budgets</button></div></form>`);
+}
 const spendBetween = (a, b) => (S.spend || []).filter(x => x.ts >= a && x.ts < b).reduce((t, x) => t + (+x.amt || 0), 0);
 function spendCard() {
   const ws = weekStart(), we = addDays(new Date(ws), 7).getTime(), spent = spendBetween(ws, we), earn = S.rate ? takeHome(weekPay(ws).gross) : 0;
@@ -1239,8 +1299,10 @@ function spendCard() {
       <input class="input" name="amt" type="number" inputmode="decimal" min="0" step="0.01" placeholder="$" style="flex:0 0 84px" required>
       <input class="input" name="note" placeholder="What for?" maxlength="30" enterkeyhint="done">
       <button class="add-btn" aria-label="Add expense">${I.plus}</button>
+      <input type="hidden" name="cat" value="">
     </form>
-    ${recent.length ? `<div class="shift-list">${recent.map(x => `<div class="shift-row" data-a="delSpend" data-id="${x.id}" style="cursor:pointer;grid-template-columns:1fr auto auto"><b>${esc(x.note || 'Expense')}</b><span class="muted" style="font-size:13px">${ago(x.ts)}</span><span>$${(+x.amt).toFixed(2)}</span></div>`).join('')}</div>` : ''}
+    <div class="chips cat-chips" data-group="cat">${SPEND_CATS.map(([c, ic]) => `<button type="button" class="chip" data-a="pickCat" data-v="${c}">${ic} ${c}</button>`).join('')}</div>
+    ${recent.length ? `<div class="shift-list">${recent.map(x => `<div class="shift-row" data-a="delSpend" data-id="${x.id}" style="cursor:pointer;grid-template-columns:1fr auto auto"><b>${catIcon(x.cat || guessCat(x.note))} ${esc(x.note || 'Expense')}</b><span class="muted" style="font-size:13px">${ago(x.ts)}</span><span>$${(+x.amt).toFixed(2)}</span></div>`).join('')}</div>` : ''}
   </section>`;
 }
 
@@ -1325,7 +1387,7 @@ function viewTasks() {
 function viewHabits() {
   const t = new Date(), tk = dkey();
   const week = Array.from({ length: 7 }, (_, i) => addDays(t, i - 6));
-  const nDone = S.habits.filter(x => hDone(x)).length;
+  const nDone = S.habits.filter(hOk).length;
   let wk = 0; S.habits.forEach(h => week.forEach(d => { if (hDone(h, dkey(d))) wk++; }));
   const wkPct = S.habits.length ? Math.round(wk / (S.habits.length * 7) * 100) : 0;
   const card = h => {
@@ -1334,7 +1396,7 @@ function viewHabits() {
       <div class="habit-top">
         <button class="habit-emoji" data-a="habitDetail" data-id="${h.id}" aria-label="Details">${h.emoji}</button>
         <div class="habit-info" data-a="habitDetail" data-id="${h.id}"><div class="habit-name">${esc(h.name)}</div>
-          <div class="habit-sub">${s ? `🔥 ${s} day${s === 1 ? '' : 's'} · ` : ''}${rate(h)}% this month</div></div>
+          <div class="habit-sub">${isWeekly(h) ? `<b class="wk-goal ${weekMet(h) ? 'met' : ''}">${weekDone(h)}/${weekGoal(h)} this week</b> · ` : ''}${s ? `🔥 ${s} ${isWeekly(h) ? 'wk' : 'day'}${s === 1 ? '' : 's'} · ` : ''}💪 ${strength(h)}%</div></div>
         <button class="habit-go ${done ? 'on' : ''}" data-a="toggleHabit" data-id="${h.id}" data-day="${tk}" aria-label="${done ? 'Undo' : 'Mark done'}">${done ? I.check : tg > 1 ? `<b>${c}/${tg}</b>` : I.check}</button>
       </div>
       <div class="week">${week.map(d => { const k = dkey(d), today = k === tk, part = hCount(h, k) > 0 && !hDone(h, k); return `<div class="wd ${today ? 'is-today' : ''}">${today ? 'Today' : d.toLocaleDateString(undefined, { weekday: 'narrow' })}
@@ -1343,7 +1405,7 @@ function viewHabits() {
   };
   const groups = Object.entries(WHEN).map(([k, [label, icon]]) => {
     const list = S.habits.filter(h => (h.when || 'any') === k); if (!list.length) return '';
-    const d = list.filter(h => hDone(h)).length;
+    const d = list.filter(hOk).length;
     return `<div class="group-label">${icon} ${label} <span class="muted" style="font-weight:600">· ${d}/${list.length}</span></div>${list.map(card).join('')}`;
   }).join('');
   const have = new Set(S.habits.map(h => h.name.toLowerCase()));
@@ -1643,6 +1705,9 @@ function habitSheet(h) {
     <label class="label">When</label>
     <div class="chips" data-group="when">${Object.entries(WHEN).map(([k, [l, ic]]) => `<button type="button" class="chip ${(h.when || 'any') === k ? 'on' : ''}" data-a="pickChip" data-v="${k}">${ic} ${l}</button>`).join('')}</div>
     <input type="hidden" name="when" value="${h.when || 'any'}">
+    <label class="label">How often</label>
+    <div class="chips" data-group="freq">${[['d', 'Every day'], ...[1, 2, 3, 4, 5, 6].map(n => ['w' + n, n + '× a week'])].map(([v, l]) => `<button type="button" class="chip ${(isWeekly(h) ? 'w' + weekGoal(h) : 'd') === v ? 'on' : ''}" data-a="pickChip" data-v="${v}">${l}</button>`).join('')}</div>
+    <input type="hidden" name="freq" value="${isWeekly(h) ? 'w' + weekGoal(h) : 'd'}">
     <label class="label">Times per day</label>
     <div class="chips" data-group="target">${[1, 2, 3, 4].map(n => `<button type="button" class="chip ${hTarget(h) === n ? 'on' : ''}" data-a="pickChip" data-v="${n}">${n}×</button>`).join('')}</div>
     <input type="hidden" name="target" value="${hTarget(h)}">
@@ -1657,11 +1722,11 @@ function habitDetail(h) {
   const cells = []; for (let d = start; dkey(d) <= dkey(end); d = addDays(d, 1)) { const k = dkey(d); cells.push(`<i class="${hDone(h, k) ? 'on' : hCount(h, k) ? 'part' : ''} ${k === dkey() ? 't' : ''}" title="${k}"></i>`); }
   openSheet(`
     <div class="habit-top" style="margin-bottom:16px"><div class="habit-emoji" style="width:52px;height:52px;font-size:26px">${h.emoji}</div>
-      <div><div class="sheet-title" style="margin:0">${esc(h.name)}</div><div class="habit-sub">Since ${Object.keys(h.log).sort()[0] ? fmtDate(Object.keys(h.log).sort()[0]) : 'today'}</div></div></div>
+      <div><div class="sheet-title" style="margin:0">${esc(h.name)}</div><div class="habit-sub">${isWeekly(h) ? `${weekGoal(h)}× a week · ` : ''}Since ${Object.keys(h.log).sort()[0] ? fmtDate(Object.keys(h.log).sort()[0]) : 'today'} · best ${bestStreak(h)}${isWeekly(h) ? ' wk' : ''}</div></div></div>
     <div class="stat-grid">
-      <div class="stat"><small>Streak</small><b>${streak(h)} 🔥</b></div>
-      <div class="stat"><small>Best</small><b>${bestStreak(h)}</b></div>
-      <div class="stat"><small>30 days</small><b>${rate(h)}%</b></div>
+      <div class="stat"><small>Strength</small><b>${strength(h)}%</b></div>
+      <div class="stat"><small>Streak</small><b>${streak(h)}${isWeekly(h) ? ' wk' : ''} 🔥</b></div>
+      <div class="stat"><small>${isWeekly(h) ? 'This week' : '30 days'}</small><b>${isWeekly(h) ? `${weekDone(h)}/${weekGoal(h)}` : rate(h) + '%'}</b></div>
     </div>
     <label class="label" style="margin-top:4px">Last ${weeks} weeks</label>
     <div class="heat">${cells.join('')}</div>
@@ -1810,13 +1875,13 @@ const A = {
     const h = byId('habits', el.dataset.id), k = el.dataset.day; if (!h) return;
     const done = bumpHabit(h, k); if (hCount(h, k)) navigator.vibrate?.(10);
     save(); el.classList.toggle('on', done);
-    const left = S.habits.filter(x => !hDone(x)).length;
+    const left = S.habits.filter(x => !hOk(x)).length;
     if (done && k === dkey() && !left && S.habits.length > 1) toast('Every habit done today 🎉');
     setTimeout(() => render(), 200);
   },
   addIdea: el => {
-    const [emoji, name, when, target] = HABIT_IDEAS[+el.dataset.i];
-    S.habits.push({ id: uid(), name, emoji, when, target, log: {} }); save(); render(); toast(`Added ${emoji} ${name}`);
+    const [emoji, name, when, target, wk] = HABIT_IDEAS[+el.dataset.i];
+    S.habits.push({ id: uid(), name, emoji, when, target, ...(wk ? { per: 'week', weekGoal: wk } : {}), log: {} }); save(); render(); toast(`Added ${emoji} ${name}`);
   },
   addHabit: () => habitSheet(),
   editHabit: el => habitSheet(byId('habits', el.dataset.id)),
@@ -1895,6 +1960,14 @@ const A = {
   openPay: () => { payMonth = 0; paySheet(); },
   payNav: el => { payMonth += +el.dataset.n; const y = $('.sheet')?.scrollTop || 0; paySheet(); const sh = $('.sheet'); if (sh) { sh.style.transition = 'none'; sh.scrollTop = y; requestAnimationFrame(() => sh.style.transition = ''); } },
   openSearch: () => searchSheet(),
+  editBudgets: () => budgetSheet(),
+  // Category chips sit outside the form, so set the form's hidden field directly. Tap again to go back to auto.
+  pickCat: el => {
+    const f = el.closest('section')?.querySelector('form[data-form=spend]'); if (!f) return;
+    const on = !el.classList.contains('on');
+    $$('.chip', el.parentElement).forEach(c => c.classList.toggle('on', on && c === el));
+    f.elements.cat.value = on ? el.dataset.v : '';
+  },
   setToggle: el => { const n = el.dataset.name; setOpen.has(n) ? setOpen.delete(n) : setOpen.add(n); el.classList.toggle('shut', !setOpen.has(n)); },
   tagFilter: el => { S.tagFilter = el.dataset.v; persist(); render(); },
   weeklyReview: () => weeklyReview(),
@@ -1932,11 +2005,16 @@ const A = {
 };
 
 const FORMS = {
+  budgets: f => {
+    const B = {}; SPEND_CATS.forEach(([c]) => { const v = +f.elements[c].value; if (v > 0) B[c] = Math.round(v); });
+    S.budgets = B; save(); closeSheet(); render(); toast('Budgets saved');
+  },
   spend: f => {
     const amt = +f.elements.amt.value; if (!(amt > 0)) return;
     const cutoff = Date.now() - 120 * 864e5;
-    S.spend = [...(S.spend || []).filter(x => x.ts > cutoff), { id: uid(), amt: +amt.toFixed(2), note: f.elements.note.value.trim(), ts: Date.now() }];
-    save(); render(); toast(`Logged $${amt.toFixed(2)}`);
+    const note = f.elements.note.value.trim(), cat = f.elements.cat.value || guessCat(note);
+    S.spend = [...(S.spend || []).filter(x => x.ts > cutoff), { id: uid(), amt: +amt.toFixed(2), note, cat, ts: Date.now() }];
+    save(); render(); toast(`Logged $${amt.toFixed(2)} · ${catIcon(cat)} ${cat}`);
   },
   shift: f => {
     const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
@@ -1973,7 +2051,8 @@ const FORMS = {
   },
   habit: f => {
     const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
-    const v = { name: d.name.trim(), emoji: d.emoji || '✅', when: d.when, target: +d.target || 1 };
+    const wk = /^w[1-6]$/.test(d.freq || '');
+    const v = { name: d.name.trim(), emoji: d.emoji || '✅', when: d.when, target: +d.target || 1, per: wk ? 'week' : 'day', weekGoal: wk ? +d.freq.slice(1) : undefined };
     if (id) Object.assign(byId('habits', id), v); else S.habits.push({ id: uid(), ...v, log: {} });
     save(); closeSheet(); render();
   },

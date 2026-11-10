@@ -90,3 +90,36 @@ alter table public.dash_accounts enable row level security;
 alter table public.dash_tickets enable row level security;
 revoke all on public.dash_accounts, public.dash_tickets from anon, authenticated;
 grant select, insert, update, delete on public.dash_accounts, public.dash_tickets to service_role;
+
+-- Push notifications. Only the dash-push edge function (service role) touches these.
+create table if not exists public.dash_kv (k text primary key, v jsonb not null);
+create table if not exists public.dash_push_subs (
+  endpoint text primary key, vault text not null, created_at timestamptz not null default now(), fails int not null default 0
+);
+create table if not exists public.dash_reminders (
+  id bigint generated always as identity primary key, vault text not null, at timestamptz not null,
+  title text not null, body text not null default '', tag text not null default '', sent boolean not null default false
+);
+create index if not exists dash_reminders_due on public.dash_reminders (sent, at);
+create table if not exists public.dash_outbox (
+  id bigint generated always as identity primary key, endpoint text not null,
+  title text, body text, tag text, created_at timestamptz not null default now()
+);
+alter table public.dash_kv enable row level security;
+alter table public.dash_push_subs enable row level security;
+alter table public.dash_reminders enable row level security;
+alter table public.dash_outbox enable row level security;
+revoke all on public.dash_kv, public.dash_push_subs, public.dash_reminders, public.dash_outbox from anon, authenticated;
+grant select, insert, update, delete on public.dash_kv, public.dash_push_subs, public.dash_reminders, public.dash_outbox to service_role;
+
+-- Every minute, ask the function to send whatever is due (uses the public publishable key).
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+select cron.unschedule('dash-push-tick') where exists (select 1 from cron.job where jobname = 'dash-push-tick');
+select cron.schedule('dash-push-tick', '* * * * *', $cron$
+  select net.http_post(
+    url := 'https://cwlpoykayfrpohfvzrfm.supabase.co/functions/v1/dash-push',
+    headers := '{"Content-Type":"application/json","apikey":"sb_publishable_HNY1baadiiTnSl7CLRFxyg_i_RmTiYB","Authorization":"Bearer sb_publishable_HNY1baadiiTnSl7CLRFxyg_i_RmTiYB"}'::jsonb,
+    body := '{"action":"tick"}'::jsonb
+  );
+$cron$);

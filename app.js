@@ -70,7 +70,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
+  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], spend: [], layout: { order: [], hidden: [] }, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
   kit: 'Badge, Water bottle, Lunch, Charger, Headphones', kitDone: { date: '', items: [] }, bills: [], billPaid: {},
   stocks: 'SPY, AAPL, NVDA',
   notes: [],
@@ -141,7 +141,7 @@ function adopt(data) {
 function merge(local, remote) {
   const dead = { ...(remote._deleted || {}), ...(local._deleted || {}) };
   const out = { ...remote, ...local, _deleted: dead };
-  for (const k of ['tasks', 'habits', 'notes', 'links', 'countdowns', 'bills', 'xShifts']) {
+  for (const k of ['tasks', 'habits', 'notes', 'links', 'countdowns', 'bills', 'xShifts', 'spend']) {
     const rmap = new Map((remote[k] || []).map(x => [x.id, x])), seen = new Set(), list = [];
     for (const x of local[k] || []) {
       const r = rmap.get(x.id); seen.add(x.id);
@@ -697,8 +697,7 @@ async function loadCal(force) {
   try { localStorage.setItem('dash.cal', JSON.stringify(CAL)); } catch { }
   calBusy = false;
   logShifts();
-  const el = $('#work'); if (el && $('#week')) { el.outerHTML = workCard(); $('#week').outerHTML = weekCard() || '<span id="week" hidden></span>'; const p = $('#pay'); if (p) p.outerHTML = payCard(); }
-  else if (S.tab === 'home' && workCard()) softRender();
+  if (S.tab === 'home') softRender();
 }
 const tm = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(':00', '').replace(/\s/g, ' ');
 const tshort = t => { const d = new Date(t), h = d.getHours(), m = d.getMinutes(); return `${h % 12 || 12}${m ? ':' + pad(m) : ''}${h < 12 ? 'a' : 'p'}`; };
@@ -1025,7 +1024,7 @@ function viewHome() {
   const f = S.focus, left = focusLeft();
   const cds = S.countdowns.map(c => ({ ...c, next: nextDate(c) })).sort((a, b) => a.next.localeCompare(b.next));
 
-  return `
+  const hero = `
   <header class="hero">
     <div style="flex:1">
       <div class="eyebrow">${now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div>
@@ -1034,15 +1033,20 @@ function viewHome() {
     <button class="icon-btn" data-a="goSettings" aria-label="Settings">${I.gear}${SY.vault ? `<span class="sync-dot" data-sync-dot="${syncStatus}"></span>` : ''}</button>
   </header>
 
-  ${!S.hideInstall && !isStandalone() ? `<div class="banner"><span style="font-size:24px">📲</span><div><b>Add to Home Screen</b>${isIOS() ? 'Tap Share, then “Add to Home Screen”.' : 'Use your browser menu → Install app.'}</div><button class="x" data-a="hideInstall" aria-label="Dismiss">${I.x}</button></div>` : ''}
-
-  ${weatherCard()}
-
-  ${workCard()}
-  ${weekCard() || '<span id="week" hidden></span>'}
-  ${payCard()}
-
-  <section class="card">
+  ${!S.hideInstall && !isStandalone() ? `<div class="banner"><span style="font-size:24px">📲</span><div><b>Add to Home Screen</b>${isIOS() ? 'Tap Share, then “Add to Home Screen”.' : 'Use your browser menu → Install app.'}</div><button class="x" data-a="hideInstall" aria-label="Dismiss">${I.x}</button></div>` : ''}`;
+  const P = {
+    weather: () => weatherCard(),
+    work: () => workCard(),
+    week: () => weekCard() || '<span id="week" hidden></span>',
+    pay: () => payCard(),
+    agenda: () => agendaCard(),
+    spend: () => spendCard(),
+    mood: () => moodCard(),
+    bills: () => billsCard(),
+    nba: () => nbaCard(),
+    anime: () => animeCard(),
+    stocks: () => stocksCard(),
+    today: () => `<section class="card">
     <div class="today">
       <div class="ring-wrap">${ring(pct)}<div class="ring-label"><div>${Math.round(pct * 100)}%<small>today</small></div></div></div>
       <div class="today-stats">
@@ -1052,35 +1056,24 @@ function viewHome() {
       </div>
     </div>
     <label class="intention"><span>🎯</span><input data-input="intention" value="${esc(S.intention.text)}" placeholder="Today’s one big thing…" enterkeyhint="done"></label>
-  </section>
-
-  ${moodCard()}
-
-  <section class="card">
+  </section>`,
+    tasks: () => `<section class="card">
     ${secHead('Up next', `<button class="link-btn" data-a="tab" data-tab="tasks">See all</button>`)}
     ${upNext.length ? `<div class="task-list">${upNext.map(taskRow).join('')}</div>`
       : `<div class="empty"><div class="big">✨</div><b>All clear</b>Nothing on your plate.</div>`}
-  </section>
-
-  ${S.habits.length ? `<section class="card">
+  </section>`,
+    habits: () => S.habits.length ? `<section class="card">
     ${secHead('Habits', `<button class="link-btn" data-a="tab" data-tab="habits">${nDone}/${S.habits.length}</button>`)}
     <div class="chip-row">${[...S.habits].sort((a, b) => hDone(a, t) - hDone(b, t) || byWhen(a, b)).map(x => `<button class="habit-chip ${hDone(x, t) ? 'on' : ''}" data-a="toggleHabit" data-id="${x.id}" data-day="${t}"><span>${x.emoji}</span>${esc(x.name)}${hTarget(x) > 1 ? `<small>${hCount(x, t)}/${hTarget(x)}</small>` : ''}</button>`).join('')}</div>
-  </section>` : ''}
-
-  ${billsCard()}
-  ${nbaCard()}
-  ${animeCard()}
-  ${stocksCard()}
-
-  <section class="card">
+  </section>` : '',
+    links: () => `<section class="card">
     ${secHead('Quick links', `<button class="link-btn" data-a="goSettings">Edit</button>`)}
     <div class="links">
       ${S.links.map(l => `<a class="qlink" href="${esc(l.url)}" target="_blank" rel="noopener"><span class="tile">${l.emoji || esc((l.title || '?')[0])}</span><span class="t">${esc(l.title)}</span></a>`).join('')}
       <button class="qlink" data-a="addLink"><span class="tile add">${I.plus}</span><span class="t">Add</span></button>
     </div>
-  </section>
-
-  <div class="grid2">
+  </section>`,
+    tools: () => `<div class="grid2">
     <section class="card mini ${f.mode === 'break' ? 'mode-break' : ''}">
       <h3>${I.timer} ${f.mode === 'focus' ? 'Focus' : 'Break'}</h3>
       <div class="focus-time" id="focus-time">${mmss(left)}</div>
@@ -1098,9 +1091,8 @@ function viewHome() {
       <div class="drops">${Array.from({ length: S.waterGoal }, (_, i) => `<i class="${i < S.water.count ? 'on' : ''}"></i>`).join('')}</div>
       <div class="mini-btns"><button data-a="water" data-n="-1" aria-label="Remove glass">${I.minus}</button><button class="primary" data-a="water" data-n="1" aria-label="Add glass" style="background:#4aa8ff">${I.plus}</button></div>
     </section>
-  </div>
-
-  <section class="card">
+  </div>`,
+    countdowns: () => `<section class="card">
     ${secHead('Countdowns')}
     <div class="cd-row">
       ${cds.map(c => { const n = dayDiff(new Date(), parseKey(c.next)); return `<button class="cd ${n <= 7 && n >= 0 ? 'soon' : ''}" data-a="editCountdown" data-id="${c.id}">
@@ -1109,7 +1101,96 @@ function viewHome() {
         <span class="t">${esc(c.title)}</span><span class="d">${fmtDate(c.next, { month: 'short', day: 'numeric', year: 'numeric' })}</span></button>`; }).join('')}
       <button class="cd add" data-a="addCountdown" aria-label="Add countdown">${I.plus}</button>
     </div>
+  </section>`,
+  };
+  const hidden = new Set((S.layout && S.layout.hidden) || []);
+  return hero + homeOrder().filter(id => !hidden.has(id) && P[id]).map(id => P[id]()).join('\n') + `
+  <div class="home-foot"><button class="chip" data-a="weeklyReview">📊 Weekly review</button><button class="chip" data-a="customizeHome">⚙️ Customize home</button></div>`;
+}
+
+/* ---------- home layout: order + hidden cards ---------- */
+const HOME_CARDS = [['weather', '🌤️ Weather'], ['work', '💼 Work'], ['week', '🗓️ Next 7 days'], ['pay', '💵 Pay estimate'], ['agenda', '📅 Coming up'],
+  ['today', '🎯 Today progress'], ['tasks', '✅ Up next'], ['habits', '🔥 Habits'], ['spend', '💸 Spending'], ['bills', '🧾 Bills'], ['mood', '🙂 Mood'],
+  ['nba', '🏀 NBA'], ['anime', '📺 Anime'], ['stocks', '📈 Watchlist'], ['links', '🔗 Quick links'], ['tools', '⏱️ Focus & water'], ['countdowns', '⏳ Countdowns']];
+function homeOrder() {
+  const known = HOME_CARDS.map(c => c[0]), saved = ((S.layout && S.layout.order) || []).filter(id => known.includes(id));
+  return [...saved, ...known.filter(id => !saved.includes(id))];
+}
+function customizeSheet() {
+  const hidden = new Set((S.layout && S.layout.hidden) || []), label = Object.fromEntries(HOME_CARDS), order = homeOrder();
+  openSheet(`
+    <div class="sheet-head"><div class="sheet-title" style="margin:0">Customize home</div><div class="spacer"></div><button class="ghost" data-a="closeSheet">Done</button></div>
+    <p class="muted" style="font-size:13px;margin-bottom:10px">Turn cards off, or move them up and down. Some cards only appear once they have something to show.</p>
+    <div class="list" style="box-shadow:none">${order.map((id, i) => `<div class="row lay">
+      <span class="row-title" style="${hidden.has(id) ? 'opacity:.45' : ''}">${label[id]}</span>
+      <span class="v"><button class="mv" data-a="layMove" data-id="${id}" data-n="-1" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button><button class="mv" data-a="layMove" data-id="${id}" data-n="1" ${i === order.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>
+      <span class="toggle"><input type="checkbox" data-change="layToggle" data-id="${id}" ${hidden.has(id) ? '' : 'checked'}><i></i></span></span></div>`).join('')}</div>
+    <div class="btn-row"><button class="btn secondary" data-a="layReset">Reset to default</button></div>`, { onClose: () => setTimeout(() => S.tab === 'home' && render(), 0) });
+}
+
+/* ---------- coming up: everything in your calendar that isn't work ---------- */
+function agendaCard() {
+  if (S.calUrl || CAL.url !== calSrc()) return '';
+  const now = Date.now(), seen = new Set(), rows = [];
+  for (const e of CAL.events || []) {
+    if (e.cal === S.workCal || (e.end || e.start) < now) continue;
+    const key = (e.title || '').toLowerCase().replace(/[^a-z0-9]/g, '') + dkey(new Date(e.start)); if (seen.has(key)) continue; seen.add(key);
+    const t = `${e.title} ${e.cal}`.toLowerCase();
+    rows.push({ ...e, icon: /pay\s*day/.test(t) ? '💵' : /birthday|bday/.test(t) ? '🎂' : /holiday/.test(t) ? '🎉' : '📅' });
+  }
+  if (!rows.length) return '';
+  return `<section class="card" id="agenda">${secHead('📅 Coming up')}
+    <div class="stock-list">${rows.slice(0, 6).map(e => { const n = dayDiff(new Date(), new Date(e.start)); return `<div class="stock">
+      <span style="font-size:22px">${e.icon}</span><div><b style="font-size:15px">${esc(e.title)}</b><small>${new Date(e.start).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}${e.allDay || e.icon === '💵' ? '' : ' · ' + tm(e.start)}</small></div>
+      <span class="pill ${n <= 1 ? 'live' : ''}">${n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : `in ${n}d`}</span></div>`; }).join('')}</div>
   </section>`;
+}
+
+/* ---------- spending: quick log, compared with what you're earning this week ---------- */
+const spendBetween = (a, b) => (S.spend || []).filter(x => x.ts >= a && x.ts < b).reduce((t, x) => t + (+x.amt || 0), 0);
+function spendCard() {
+  const ws = weekStart(), we = addDays(new Date(ws), 7).getTime(), spent = spendBetween(ws, we), earn = S.rate ? takeHome(weekPay(ws).gross) : 0;
+  const recent = [...(S.spend || [])].sort((a, b) => b.ts - a.ts).slice(0, 3);
+  return `<section class="card" id="spend">${secHead('💸 Spending', `<span class="muted" style="font-size:13px;font-weight:600">this week</span>`)}
+    <div class="shift-when" style="margin-bottom:8px"><b style="font-size:28px">${money(spent)}</b>${earn ? `<span class="muted" style="font-size:14px;font-weight:600">${earn - spent >= 0 ? money(earn - spent) + ' left of ' + money(earn) : money(spent - earn) + ' over ' + money(earn)}</span>` : ''}</div>
+    ${earn ? `<div class="progress" style="margin:0 0 12px"><i style="width:${Math.min(100, spent / earn * 100)}%;${spent > earn ? 'background:var(--danger)' : ''}"></i></div>` : ''}
+    <form class="quick-add" data-form="spend" autocomplete="off">
+      <input class="input" name="amt" type="number" inputmode="decimal" min="0" step="0.01" placeholder="$" style="flex:0 0 84px" required>
+      <input class="input" name="note" placeholder="What for?" maxlength="30" enterkeyhint="done">
+      <button class="add-btn" aria-label="Add expense">${I.plus}</button>
+    </form>
+    ${recent.length ? `<div class="shift-list">${recent.map(x => `<div class="shift-row" data-a="delSpend" data-id="${x.id}" style="cursor:pointer;grid-template-columns:1fr auto auto"><b>${esc(x.note || 'Expense')}</b><span class="muted" style="font-size:13px">${ago(x.ts)}</span><span>$${(+x.amt).toFixed(2)}</span></div>`).join('')}</div>` : ''}
+  </section>`;
+}
+
+/* ---------- weekly review ---------- */
+function weeklyReview() {
+  const stats = off => {
+    const a = addDays(new Date(weekStart()), off * 7).getTime(), b = addDays(new Date(a), 7).getTime(), days = Array.from({ length: 7 }, (_, i) => dkey(addDays(new Date(a), i)));
+    const past = days.filter(k => k <= dkey());
+    const hab = S.habits.length && past.length ? past.reduce((t, k) => t + S.habits.filter(h => hDone(h, k)).length, 0) / (S.habits.length * past.length) : 0;
+    const moods = days.map(k => S.moods[k]).filter(Boolean), wp = weekPay(a);
+    return { a, b, days, tasks: S.tasks.filter(t => t.done && days.includes(t.doneAt)).length, hab, focus: days.reduce((t, k) => t + (S.focus.sessions[k] || 0), 0),
+      hours: wp.h, gross: wp.gross, spent: spendBetween(a, b), mood: moods.length ? moods.reduce((x, y) => x + y, 0) / moods.length : 0 };
+  };
+  const cur = stats(0), prev = stats(-1), fmt = t => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const delta = (x, y, unit = '') => !y && !x ? '' : `<em class="${x >= y ? 'up' : 'down'}">${x >= y ? '▲' : '▼'} ${Math.abs(+(x - y).toFixed(1))}${unit} vs last week</em>`;
+  const tile = (label, value, d = '') => `<div class="stat rv"><small>${label}</small><b>${value}</b>${d}</div>`;
+  const best = [...S.habits].map(h => ({ h, n: cur.days.filter(k => hDone(h, k)).length })).sort((x, y) => y.n - x.n)[0];
+  openSheet(`
+    <div class="sheet-head"><div><div class="sheet-title" style="margin:0">Weekly review</div><div class="muted" style="font-size:13px">${fmt(cur.a)} – ${fmt(cur.b - 864e5)} so far</div></div><div class="spacer"></div><button class="ghost" data-a="closeSheet">Done</button></div>
+    <div class="stat-grid" style="grid-template-columns:1fr 1fr">
+      ${tile('Tasks done', cur.tasks, delta(cur.tasks, prev.tasks))}
+      ${tile('Habits kept', Math.round(cur.hab * 100) + '%', delta(Math.round(cur.hab * 100), Math.round(prev.hab * 100), '%'))}
+      ${tile('Hours scheduled', +cur.hours.toFixed(1) + 'h', delta(cur.hours, prev.hours, 'h'))}
+      ${S.rate ? tile('Pay (est.)', money(cur.gross), delta(Math.round(cur.gross), Math.round(prev.gross))) : ''}
+      ${tile('Spent', money(cur.spent), cur.spent || prev.spent ? `<em>${money(prev.spent)} last week</em>` : '')}
+      ${tile('Focus sessions', cur.focus, delta(cur.focus, prev.focus))}
+      ${tile('Mood', cur.mood ? MOODS[Math.round(cur.mood) - 1][0] + ' ' + MOODS[Math.round(cur.mood) - 1][1] : '—')}
+      ${best && best.n ? tile('Best habit', `${best.h.emoji} ${best.n}/7`, `<em>${esc(best.h.name)}</em>`) : ''}
+    </div>
+    <label class="label">Habits each day</label>
+    <div class="rv-days">${cur.days.map(k => { const n = S.habits.filter(h => hDone(h, k)).length, pc = S.habits.length ? n / S.habits.length : 0; return `<div><div class="rv-bar"><i style="height:${Math.round(pc * 100)}%"></i></div><small>${parseKey(k).toLocaleDateString(undefined, { weekday: 'narrow' })}</small></div>`; }).join('')}</div>`);
 }
 
 function moodCard() {
@@ -1260,6 +1341,12 @@ function viewSettings() {
   <div class="list">
     <div class="pad"><div class="seg">${[['auto', 'Auto'], ['dark', 'Dark'], ['light', 'Light']].map(([k, l]) => `<button class="${S.theme === k ? 'on' : ''}" data-a="setTheme" data-v="${k}">${l}</button>`).join('')}</div></div>
     <div class="swatches" style="padding-top:0">${Object.entries(ACCENTS).map(([k, c]) => `<button class="swatch ${S.accent === k ? 'on' : ''}" style="background:${c};color:${c}" data-a="setAccent" data-v="${k}" aria-label="${k}"></button>`).join('')}</div>
+  </div>
+
+  <div class="settings-label">Home screen</div>
+  <div class="list">
+    ${row('⚙️', 'Customize home', `<span class="v">Hide or reorder cards${I.chev}</span>`, 'customizeHome')}
+    ${row('📊', 'Weekly review', `<span class="v">${I.chev}</span>`, 'weeklyReview')}
   </div>
 
   <div class="settings-label">Home widgets</div>
@@ -1705,6 +1792,15 @@ const A = {
   },
   openPay: () => { payMonth = 0; paySheet(); },
   payNav: el => { payMonth += +el.dataset.n; const y = $('.sheet')?.scrollTop || 0; paySheet(); const sh = $('.sheet'); if (sh) { sh.style.transition = 'none'; sh.scrollTop = y; requestAnimationFrame(() => sh.style.transition = ''); } },
+  weeklyReview: () => weeklyReview(),
+  customizeHome: () => customizeSheet(),
+  layMove: el => {
+    const order = homeOrder(), i = order.indexOf(el.dataset.id), j = i + +el.dataset.n; if (j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]]; S.layout = { hidden: (S.layout && S.layout.hidden) || [], order }; save();
+    const y = $('.sheet')?.scrollTop || 0; customizeSheet(); const sh = $('.sheet'); if (sh) sh.scrollTop = y;
+  },
+  layReset: () => { S.layout = { order: [], hidden: [] }; save(); customizeSheet(); },
+  delSpend: el => removeWithUndo('spend', el.dataset.id, 'Expense'),
   addShift: () => shiftSheet(),
   editShift: el => shiftSheet(byId('xShifts', el.dataset.id)),
   deleteShift: el => { unlogShift(byId('xShifts', el.dataset.id)); removeWithUndo('xShifts', el.dataset.id, 'Shift'); logShifts(); render(); },
@@ -1727,6 +1823,12 @@ const A = {
 };
 
 const FORMS = {
+  spend: f => {
+    const amt = +f.elements.amt.value; if (!(amt > 0)) return;
+    const cutoff = Date.now() - 120 * 864e5;
+    S.spend = [...(S.spend || []).filter(x => x.ts > cutoff), { id: uid(), amt: +amt.toFixed(2), note: f.elements.note.value.trim(), ts: Date.now() }];
+    save(); render(); toast(`Logged $${amt.toFixed(2)}`);
+  },
   shift: f => {
     const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
     if (!d.day || !d.from || !d.to) return;
@@ -1791,6 +1893,11 @@ const INPUTS = {
   },
 };
 const CHANGES = {
+  layToggle: el => {
+    const hidden = new Set((S.layout && S.layout.hidden) || []); el.checked ? hidden.delete(el.dataset.id) : hidden.add(el.dataset.id);
+    S.layout = { order: (S.layout && S.layout.order) || [], hidden: [...hidden] }; save();
+    el.closest('.row').querySelector('.row-title').style.opacity = el.checked ? '' : '.45';
+  },
   rate: el => { S.rate = Math.max(0, +el.value || 0); save(); },
   job: el => { S.job = el.value.trim().slice(0, 30); save(); },
   taxPct: el => { S.taxPct = Math.max(0, Math.min(60, +el.value || 0)); save(); },

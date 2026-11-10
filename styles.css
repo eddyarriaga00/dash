@@ -593,3 +593,20 @@ input.chip[type="date"] { min-height: 40px; color: var(--text); -webkit-appearan
 .pc.t { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .pc em { position: absolute; top: -5px; right: -3px; font-size: 12px; font-style: normal; }
 .list .row.now { background: var(--accent-soft); }
+
+/* ============ Home layout, agenda, review ============ */
+.home-foot { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; padding-top: 6px; }
+.row.lay { padding-top: 9px; padding-bottom: 9px; min-height: 0; }
+.mv { width: 34px; height: 34px; border-radius: 10px; background: var(--surface-2); font-size: 16px; font-weight: 700; }
+.mv:disabled { opacity: .3; }
+.mv:active { transform: scale(.9); }
+#agenda .stock > div { flex: 1; min-width: 0; }
+#agenda .pill { flex: none; }
+.stat.rv b { font-size: 22px; display: block; }
+.stat.rv em { font-style: normal; font-size: 11.5px; font-weight: 600; color: var(--muted); display: block; margin-top: 2px; }
+.stat.rv em.up { color: var(--ok); }
+.stat.rv em.down { color: var(--danger); }
+.rv-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; text-align: center; }
+.rv-bar { height: 84px; border-radius: 10px; background: var(--surface-2); display: flex; align-items: flex-end; overflow: hidden; }
+.rv-bar i { display: block; width: 100%; background: var(--accent); border-radius: 10px; min-height: 0; }
+.rv-days small { font-size: 11px; font-weight: 700; color: var(--muted); display: block; margin-top: 5px; }

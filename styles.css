@@ -623,3 +623,33 @@ input.chip[type="date"] { min-height: 40px; color: var(--text); -webkit-appearan
 .link-btn { white-space: nowrap; flex: none; }
 .sec-head { gap: 10px; }
 .sec-head h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ============ Sections on home ============ */
+.sec-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 10px 4px 0; margin-top: 22px !important; }
+.sec-toggle span { font-size: 22px; font-weight: 750; letter-spacing: -.02em; }
+.sec-toggle svg.i { width: 18px; height: 18px; color: var(--faint); transform: rotate(90deg); transition: transform .2s; }
+.sec-toggle.shut svg.i { transform: rotate(0deg); }
+.sec-toggle.shut span { color: var(--muted); }
+.sec-toggle + .card, .sec-toggle + .grid2 { margin-top: 10px !important; }
+.msum { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 12px; }
+.msum > div { min-width: 0; }
+.msum small { display: block; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.msum b { display: block; font-size: 21px; font-weight: 750; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msum em { display: block; font-style: normal; font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lay-head { display: flex; align-items: center; justify-content: space-between; margin: 18px 4px 8px; }
+.lay-head b { font-size: 16px; }
+.lay-head span { display: flex; gap: 6px; }
+
+/* ============ Settings as a menu ============ */
+.settings-label {
+  display: flex; align-items: center; gap: 12px; margin: 10px 0 0 !important; padding: 13px 16px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 18px;
+  font-size: 16px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--text);
+}
+.settings-label .ic { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; font-size: 16px; background: var(--surface-2); flex: none; }
+.settings-label svg.i { margin-left: auto; width: 16px; height: 16px; color: var(--faint); transform: rotate(90deg); transition: transform .2s; }
+.settings-label.shut svg.i { transform: rotate(0deg); }
+.settings-label.shut + .list { display: none; }
+.settings-label:not(.shut) { border-radius: 18px 18px 0 0; border-bottom-color: transparent; }
+.settings-label:not(.shut) + .list { margin-top: 0 !important; border-radius: 0 0 18px 18px; }
+.settings-label:active { opacity: .8; }

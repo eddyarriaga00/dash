@@ -71,7 +71,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], tags: ['School', 'Work', 'Personal', 'Errands'], tagFilter: '', spend: [], layout: { order: [], hidden: [] }, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
+  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], tags: ['School', 'Work', 'Personal', 'Errands'], tagFilter: '', spend: [], layout: null, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
   kit: 'Badge, Water bottle, Lunch, Charger, Headphones', kitDone: { date: '', items: [] }, bills: [], billPaid: {},
   stocks: 'SPY, AAPL, NVDA',
   notes: [],
@@ -1113,8 +1113,15 @@ function viewHome() {
     </div>
   </section>`,
   };
-  const hidden = new Set((S.layout && S.layout.hidden) || []);
-  return hero + brief() + homeOrder().filter(id => !hidden.has(id) && P[id]).map(id => P[id]()).join('\n') + `
+  P.moneySum = () => moneySummary();
+  const L = layout(), hidden = new Set(L.hidden), shut = new Set(L.collapsed);
+  const body = sectionOrder().map(([id, title, cards]) => {
+    const html = cards.filter(c => !hidden.has(c) && P[c]).map(c => P[c]()).filter(x => x && !/^<span id="week" hidden>/.test(x)).join('\n');
+    if (!html) return '';
+    if (!title) return html;
+    return `<button class="sec-toggle ${shut.has(id) ? 'shut' : ''}" data-a="secToggle" data-id="${id}"><span>${title}</span>${I.chev}</button>${shut.has(id) ? '' : html}`;
+  }).join('\n');
+  return hero + brief() + body + `
   <div class="home-foot"><button class="chip" data-a="weeklyReview">📊 Weekly review</button><button class="chip" data-a="customizeHome">⚙️ Customize home</button></div>`;
 }
 
@@ -1166,23 +1173,39 @@ function searchResults(q) {
   return rows.length ? `<div class="list" style="box-shadow:none">${rows.map(([a, id, ic, t, sub]) => `<button class="row" data-a="${a}" data-id="${id}"><span class="ic">${ic}</span><span class="row-title" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t)}</span><span class="v">${esc(sub)}</span></button>`).join('')}</div>` : '<div class="muted">Nothing found.</div>';
 }
 
-/* ---------- home layout: order + hidden cards ---------- */
-const HOME_CARDS = [['weather', '🌤️ Weather'], ['work', '💼 Work'], ['week', '🗓️ Next 7 days'], ['pay', '💵 Pay estimate'], ['agenda', '📅 Coming up'],
-  ['today', '🎯 Today progress'], ['tasks', '✅ Up next'], ['habits', '🔥 Habits'], ['spend', '💸 Spending'], ['bills', '🧾 Bills'], ['mood', '🙂 Mood'],
-  ['nba', '🏀 NBA'], ['anime', '📺 Anime'], ['stocks', '📈 Watchlist'], ['links', '🔗 Quick links'], ['tools', '⏱️ Focus & water'], ['countdowns', '⏳ Countdowns']];
-function homeOrder() {
-  const known = HOME_CARDS.map(c => c[0]), saved = ((S.layout && S.layout.order) || []).filter(id => known.includes(id));
-  return [...saved, ...known.filter(id => !saved.includes(id))];
+/* ---------- home layout: sections you can collapse, reorder, and hide cards in ---------- */
+const CARD_LABEL = { weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Next 7 days', today: '🎯 Today progress', tasks: '✅ Up next', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
+  moneySum: '💳 Money summary', pay: '💵 Pay estimate', spend: '💸 Spending', bills: '🧾 Bills', stocks: '📈 Watchlist', nba: '🏀 NBA', anime: '📺 Anime', links: '🔗 Quick links', tools: '⏱️ Focus & water', countdowns: '⏳ Countdowns' };
+const SECTIONS = [['top', '', ['weather']], ['work', 'Work', ['work', 'week']], ['today', 'Today', ['today', 'tasks', 'habits', 'agenda', 'mood']],
+  ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'stocks']], ['fun', 'For fun', ['nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']]];
+// Pay, spending, bills and stocks live in the Money tab, so home shows a one-card summary by default.
+const LAYOUT_DEFAULT = () => ({ v: 2, sections: [], hidden: ['pay', 'spend', 'bills', 'stocks'], collapsed: [] });
+function layout() { if (!S.layout || S.layout.v !== 2) S.layout = LAYOUT_DEFAULT(); return S.layout; }
+function sectionOrder() {
+  const ids = SECTIONS.map(x => x[0]), saved = (layout().sections || []).filter(id => ids.includes(id));
+  return [...saved, ...ids.filter(id => !saved.includes(id))].map(id => SECTIONS.find(x => x[0] === id));
+}
+function moneySummary() {
+  const ws = weekStart(), spent = spendBetween(ws, addDays(new Date(ws), 7).getTime()), wp = S.rate ? weekPay(ws) : null;
+  const bill = (S.bills || []).map(b => ({ b, d: billDue(b).days })).sort((x, y) => x.d - y.d)[0], pd = nextPayday();
+  if (!wp && !spent && !bill) return '';
+  const cell = (label, value, sub = '') => `<div><small>${label}</small><b>${value}</b>${sub ? `<em>${sub}</em>` : ''}</div>`;
+  return `<section class="card pressable" id="msum" data-a="tab" data-tab="money" style="cursor:pointer">
+    <div class="msum">
+      ${wp ? cell('This week', money(wp.gross), `${+wp.h.toFixed(1)}h${pd ? ` · payday ${dayDiff(new Date(), pd) === 0 ? 'today' : 'in ' + dayDiff(new Date(), pd) + 'd'}` : ''}`) : ''}
+      ${cell('Spent', money(spent), wp ? (takeHome(wp.gross) - spent >= 0 ? money(takeHome(wp.gross) - spent) + ' left' : 'over') : 'this week')}
+      ${bill ? cell('Next bill', esc(bill.b.name), bill.d < 0 ? 'overdue' : bill.d === 0 ? 'today' : `in ${bill.d}d`) : ''}
+    </div></section>`;
 }
 function customizeSheet() {
-  const hidden = new Set((S.layout && S.layout.hidden) || []), label = Object.fromEntries(HOME_CARDS), order = homeOrder();
+  const L = layout(), hidden = new Set(L.hidden), order = sectionOrder();
   openSheet(`
     <div class="sheet-head"><div class="sheet-title" style="margin:0">Customize home</div><div class="spacer"></div><button class="ghost" data-a="closeSheet">Done</button></div>
-    <p class="muted" style="font-size:13px;margin-bottom:10px">Turn cards off, or move them up and down. Some cards only appear once they have something to show.</p>
-    <div class="list" style="box-shadow:none">${order.map((id, i) => `<div class="row lay">
-      <span class="row-title" style="${hidden.has(id) ? 'opacity:.45' : ''}">${label[id]}</span>
-      <span class="v"><button class="mv" data-a="layMove" data-id="${id}" data-n="-1" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button><button class="mv" data-a="layMove" data-id="${id}" data-n="1" ${i === order.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>
-      <span class="toggle"><input type="checkbox" data-change="layToggle" data-id="${id}" ${hidden.has(id) ? '' : 'checked'}><i></i></span></span></div>`).join('')}</div>
+    <p class="muted" style="font-size:13px;margin-bottom:4px">Move whole sections up or down, and switch individual cards on or off. On the home screen, tap a section’s name to fold it away.</p>
+    ${order.map(([id, title, cards], i) => `
+      <div class="lay-head"><b>${title || 'Top'}</b><span><button class="mv" data-a="secMove" data-id="${id}" data-n="-1" ${i === 0 ? 'disabled' : ''} aria-label="Move section up">↑</button><button class="mv" data-a="secMove" data-id="${id}" data-n="1" ${i === order.length - 1 ? 'disabled' : ''} aria-label="Move section down">↓</button></span></div>
+      <div class="list" style="box-shadow:none">${cards.map(c => `<label class="row lay"><span class="row-title" style="${hidden.has(c) ? 'opacity:.45' : ''}">${CARD_LABEL[c]}</span>
+        <span class="toggle" style="margin-left:auto"><input type="checkbox" data-change="layToggle" data-id="${c}" ${hidden.has(c) ? '' : 'checked'}><i></i></span></label>`).join('')}</div>`).join('')}
     <div class="btn-row"><button class="btn secondary" data-a="layReset">Reset to default</button></div>`, { onClose: () => setTimeout(() => S.tab === 'home' && render(), 0) });
 }
 
@@ -1489,10 +1512,23 @@ function viewSettings() {
    RENDER / NAV
    ========================================================= */
 const VIEWS = { home: viewHome, tasks: viewTasks, habits: viewHabits, money: viewMoney, notes: viewNotes, settings: viewSettings };
+const SET_ICON = { 'Account': '👤', 'Cloud sync': '☁️', 'Profile': '👋', 'Appearance': '🎨', 'Home screen': '🏠', 'Home widgets': '🧩', 'Work schedule': '💼', 'Work & pay': '💵',
+  'Bills': '🧾', 'Weather': '🌤️', 'Focus & water': '⏱️', 'Quick links': '🔗', 'Countdowns': '⏳', 'Your data': '📦' };
+const setOpen = new Set();
+// Settings is a menu: each group's heading opens and closes its list.
+function tidySettings(root) {
+  $$('.settings-label', root).forEach(el => {
+    const name = el.textContent.trim();
+    el.dataset.a = 'setToggle'; el.dataset.name = name; el.setAttribute('role', 'button');
+    el.innerHTML = `<span class="ic">${SET_ICON[name] || '⚙️'}</span><span>${esc(name)}</span>${I.chev}`;
+    el.classList.toggle('shut', !setOpen.has(name));
+  });
+}
 function render(animate = false) {
   const v = $('#view');
   const y = scrollY;
   v.innerHTML = (VIEWS[S.tab] || viewHome)();
+  if (S.tab === 'settings') tidySettings(v);
   if (animate) { v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter'); scrollTo(0, 0); }
   else scrollTo(0, y);
   renderTabs(); loadWidgets();
@@ -1859,15 +1895,20 @@ const A = {
   openPay: () => { payMonth = 0; paySheet(); },
   payNav: el => { payMonth += +el.dataset.n; const y = $('.sheet')?.scrollTop || 0; paySheet(); const sh = $('.sheet'); if (sh) { sh.style.transition = 'none'; sh.scrollTop = y; requestAnimationFrame(() => sh.style.transition = ''); } },
   openSearch: () => searchSheet(),
+  setToggle: el => { const n = el.dataset.name; setOpen.has(n) ? setOpen.delete(n) : setOpen.add(n); el.classList.toggle('shut', !setOpen.has(n)); },
   tagFilter: el => { S.tagFilter = el.dataset.v; persist(); render(); },
   weeklyReview: () => weeklyReview(),
   customizeHome: () => customizeSheet(),
-  layMove: el => {
-    const order = homeOrder(), i = order.indexOf(el.dataset.id), j = i + +el.dataset.n; if (j < 0 || j >= order.length) return;
-    [order[i], order[j]] = [order[j], order[i]]; S.layout = { hidden: (S.layout && S.layout.hidden) || [], order }; save();
+  secToggle: el => {
+    const L = layout(), id = el.dataset.id; L.collapsed = L.collapsed.includes(id) ? L.collapsed.filter(x => x !== id) : [...L.collapsed, id];
+    save(); render();
+  },
+  secMove: el => {
+    const L = layout(), order = sectionOrder().map(x => x[0]), i = order.indexOf(el.dataset.id), j = i + +el.dataset.n; if (j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]]; L.sections = order; save();
     const y = $('.sheet')?.scrollTop || 0; customizeSheet(); const sh = $('.sheet'); if (sh) sh.scrollTop = y;
   },
-  layReset: () => { S.layout = { order: [], hidden: [] }; save(); customizeSheet(); },
+  layReset: () => { S.layout = LAYOUT_DEFAULT(); save(); customizeSheet(); },
   delSpend: el => removeWithUndo('spend', el.dataset.id, 'Expense'),
   addShift: () => shiftSheet(),
   editShift: el => shiftSheet(byId('xShifts', el.dataset.id)),
@@ -1963,8 +2004,8 @@ const INPUTS = {
 };
 const CHANGES = {
   layToggle: el => {
-    const hidden = new Set((S.layout && S.layout.hidden) || []); el.checked ? hidden.delete(el.dataset.id) : hidden.add(el.dataset.id);
-    S.layout = { order: (S.layout && S.layout.order) || [], hidden: [...hidden] }; save();
+    const L = layout(), hidden = new Set(L.hidden); el.checked ? hidden.delete(el.dataset.id) : hidden.add(el.dataset.id);
+    L.hidden = [...hidden]; save();
     el.closest('.row').querySelector('.row-title').style.opacity = el.checked ? '' : '.45';
   },
   rate: el => { S.rate = Math.max(0, +el.value || 0); save(); },

@@ -40,6 +40,7 @@ const I = {
   chev: svg('<path d="m9 6 6 6-6 6"/>'),
   x: svg('<path d="M6 6l12 12M18 6 6 18"/>'),
   timer: svg('<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2h6"/>'),
+  card: svg('<rect x="2.5" y="5.500" width="19" height="13" rx="3"/><path d="M2.500 10h19M15.500 14.500h2.500"/>'),
   drop: svg('<path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/>'),
 };
 
@@ -70,7 +71,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], spend: [], layout: { order: [], hidden: [] }, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
+  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], tags: ['School', 'Work', 'Personal', 'Errands'], tagFilter: '', spend: [], layout: { order: [], hidden: [] }, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
   kit: 'Badge, Water bottle, Lunch, Charger, Headphones', kitDone: { date: '', items: [] }, bills: [], billPaid: {},
   stocks: 'SPY, AAPL, NVDA',
   notes: [],
@@ -118,7 +119,7 @@ function rollDay() {
    ========================================================= */
 const SB_URL = 'https://cwlpoykayfrpohfvzrfm.supabase.co';
 const SB_KEY = 'sb_publishable_HNY1baadiiTnSl7CLRFxyg_i_RmTiYB'; // public by design
-const LOCAL_ONLY = ['tab', 'taskFilter', 'hideInstall'];
+const LOCAL_ONLY = ['tab', 'taskFilter', 'hideInstall', 'tagFilter'];
 let SY = (() => { try { return JSON.parse(localStorage.getItem('dash.sync')) || {}; } catch { return {}; } })();
 const saveSY = () => { try { localStorage.setItem('dash.sync', JSON.stringify(SY)); } catch { } };
 let syncStatus = SY.vault ? 'ok' : 'off', pushTimer = null, syncBusy = false, syncAgain = false;
@@ -363,6 +364,7 @@ function taskRow(t) {
   const bits = [
     d && !t.done ? `<span class="due ${d.c}">${d.t}</span>` : '',
     t.repeat && !t.done ? `<span class="rep">🔁 ${REPEATS[t.repeat]}</span>` : '',
+    t.tag ? `<span class="tag">${esc(t.tag)}</span>` : '',
     t.priority ? `<span class="prio">${'!'.repeat(t.priority)}</span>` : '',
   ].join('');
   return `<div class="swipe" data-tid="${t.id}">
@@ -401,8 +403,14 @@ function setTaskDone(id, done) {
   save();
   return msg;
 }
+// Find an existing tag ignoring case, or add a new one.
+function useTag(name) {
+  S.tags = S.tags || [];
+  const hit = S.tags.find(t => t.toLowerCase() === name.toLowerCase()); if (hit) return hit;
+  const t = name[0].toUpperCase() + name.slice(1); S.tags.push(t); return t;
+}
 function parseQuick(text) {
-  let due = '', priority = 0, repeat = '';
+  let due = '', priority = 0, repeat = '', tag = '';
   const words = text.trim().split(/\s+/), keep = [];
   for (const w of words) {
     const l = w.toLowerCase();
@@ -411,15 +419,16 @@ function parseQuick(text) {
     else if (l === 'today' || l === 'tod') due = dkey();
     else if (l === 'tomorrow' || l === 'tmr' || l === 'tmrw') due = dkey(addDays(new Date(), 1));
     else if (REPEATS[l]) repeat = l;
+    else if (/^#[\w-]{2,20}$/.test(w)) tag = useTag(w.slice(1));
     else keep.push(w);
   }
   if (repeat && !due) due = dkey();
-  return { text: keep.join(' ') || text.trim(), due, priority, repeat };
+  return { text: keep.join(' ') || text.trim(), due, priority, repeat, tag };
 }
 function addTask(raw, defaultDue = '') {
   const p = parseQuick(raw);
   if (!p.text) return;
-  S.tasks.push({ id: uid(), text: p.text, done: false, due: p.due || defaultDue, priority: p.priority, repeat: p.repeat, created: Date.now() });
+  S.tasks.push({ id: uid(), text: p.text, done: false, due: p.due || defaultDue, priority: p.priority, repeat: p.repeat, tag: p.tag || (S.tab === 'tasks' ? S.tagFilter : '') || '', created: Date.now() });
   save();
 }
 
@@ -697,7 +706,7 @@ async function loadCal(force) {
   try { localStorage.setItem('dash.cal', JSON.stringify(CAL)); } catch { }
   calBusy = false;
   logShifts();
-  if (S.tab === 'home') softRender();
+  if (S.tab === 'home' || S.tab === 'money') softRender();
 }
 const tm = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(':00', '').replace(/\s/g, ' ');
 const tshort = t => { const d = new Date(t), h = d.getHours(), m = d.getMinutes(); return `${h % 12 || 12}${m ? ':' + pad(m) : ''}${h < 12 ? 'a' : 'p'}`; };
@@ -777,7 +786,7 @@ function workCard() {
     <div class="muted" style="margin-bottom:10px">Which calendar has your shifts?</div>
     <div class="chips">${cals.map(c => `<button class="chip" data-a="setWorkCal" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></section>`;
   const now = Date.now(), all = shifts(), evs = all.filter(e => (e.end || e.start + 36e5) > now);
-  const head = secHead(`💼 ${S.job ? esc(S.job) : 'Work'}`, `<span style="display:flex;gap:14px"><button class="link-btn" data-a="addShift">Add shift</button>${!S.calUrl ? `<button class="link-btn" data-a="updateShifts">Update</button>` : ''}</span>`);
+  const head = secHead(`💼 ${S.job ? esc(S.job) : 'Work'}`, `<span style="display:flex;gap:14px"><button class="link-btn" data-a="addShift">+ Shift</button>${!S.calUrl ? `<button class="link-btn" data-a="updateShifts">Update</button>` : ''}</span>`);
   if (!evs.length) return `<section class="card" id="work">${head}<div class="muted">${CAL.error && S.calUrl ? 'Couldn’t load your schedule from that link.' : mine || !src ? `No shifts coming up 🎉${CAL.at && now - CAL.at > 3 * 864e5 ? ' (last update from your iPhone was ' + ago(CAL.at).toLowerCase() + ')' : ''}` : 'Loading your schedule…'}</div></section>`;
   const dayName = t => { const n = dayDiff(new Date(), new Date(t)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
   const range = e => e.allDay ? 'All day' : `${tm(e.start)} – ${tm(e.end || e.start)}`;
@@ -925,7 +934,7 @@ function stocksCard() {
         <div class="px"><b>${x.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b><span class="chg ${up ? 'up' : 'down'}">${up ? '+' : ''}${ch.toFixed(2)}%</span></div></div>`; }).join('')}</div>`}
   </section>`;
 }
-const loadWidgets = () => { if (S.tab === 'home') { loadNBA(); loadAnime(); loadCal(); loadStocks(); } };
+const loadWidgets = () => { if (S.tab === 'home') { loadNBA(); loadAnime(); } if (S.tab === 'home' || S.tab === 'money') { loadCal(); loadStocks(); } };
 
 /* =========================================================
    FOCUS TIMER
@@ -1030,6 +1039,7 @@ function viewHome() {
       <div class="eyebrow">${now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div>
       <h1>${greet}${S.name ? `,<br><span class="accent">${esc(S.name)}</span>` : ''}</h1>
     </div>
+    <button class="icon-btn" data-a="openSearch" aria-label="Search">${I.search}</button>
     <button class="icon-btn" data-a="goSettings" aria-label="Settings">${I.gear}${SY.vault ? `<span class="sync-dot" data-sync-dot="${syncStatus}"></span>` : ''}</button>
   </header>
 
@@ -1104,8 +1114,56 @@ function viewHome() {
   </section>`,
   };
   const hidden = new Set((S.layout && S.layout.hidden) || []);
-  return hero + homeOrder().filter(id => !hidden.has(id) && P[id]).map(id => P[id]()).join('\n') + `
+  return hero + brief() + homeOrder().filter(id => !hidden.has(id) && P[id]).map(id => P[id]()).join('\n') + `
   <div class="home-foot"><button class="chip" data-a="weeklyReview">📊 Weekly review</button><button class="chip" data-a="customizeHome">⚙️ Customize home</button></div>`;
+}
+
+// One row at the top of home: the few things that matter right now.
+function brief() {
+  const now = Date.now(), out = [], all = shifts(), sh = all.find(e => !e.allDay && (e.end || e.start) > now);
+  if (sh && dkey(new Date(sh.start)) === dkey()) out.push(['home', sh.start <= now ? `💼 On shift till ${tm(sh.end)}` : `💼 Work ${tm(sh.start)}${S.commute ? ` · leave ${tm(sh.start - S.commute * 6e4)}` : ''}`]);
+  else if (all.length) out.push(['home', '🏖️ No shift today']);
+  const due = todayTasks().open.length; if (due) out.push(['tasks', `✅ ${due} task${due === 1 ? '' : 's'} due`]);
+  if (S.habits.length) { const left = S.habits.filter(h => !hDone(h)).length; out.push(['habits', left ? `🔥 ${left} habit${left === 1 ? '' : 's'} left` : '🔥 Habits done']); }
+  const bill = (S.bills || []).map(b => ({ b, d: billDue(b).days })).filter(x => x.d <= 3).sort((x, y) => x.d - y.d)[0];
+  if (bill) out.push(['money', `🧾 ${esc(bill.b.name)} ${bill.d < 0 ? 'overdue' : bill.d === 0 ? 'due today' : `due in ${bill.d}d`}`]);
+  const pd = nextPayday(); if (pd && dayDiff(new Date(), pd) <= 2) out.push(['money', `💵 Payday ${dayDiff(new Date(), pd) === 0 ? 'today' : dayDiff(new Date(), pd) === 1 ? 'tomorrow' : 'in 2d'}`]);
+  return out.length ? `<div class="chip-row brief">${out.map(([tab, text]) => `<button class="habit-chip" data-a="tab" data-tab="${tab}">${text}</button>`).join('')}</div>` : '';
+}
+
+/* ---------- money tab: pay, spending, bills and stocks in one place ---------- */
+function viewMoney() {
+  const checks = S.rate ? paychecks(Date.now(), 3).filter(c => c.h) : [], d = new Date(), ms = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+  const list = [...(S.spend || [])].filter(x => x.ts >= ms).sort((a, b) => b.ts - a.ts), fmt = t => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return `
+  <header class="page-head"><h1>Money</h1><div class="spacer"></div><button class="icon-btn" data-a="goSettings" aria-label="Settings">${I.gear}</button></header>
+  ${S.rate ? payCard() : `<section class="card">${secHead('💵 Pay estimate')}<div class="muted" style="margin-bottom:12px">Add your hourly pay to see what each week and paycheck comes to.</div><button class="btn" data-a="goSettings">Set it up</button></section>`}
+  ${checks.length ? `<section class="card">${secHead('Next paychecks', `<button class="link-btn" data-a="openPay">Calendar</button>`)}<div class="stock-list">${checks.map(c => `<div class="stock"><span style="font-size:22px">💵</span>
+    <div><b style="font-size:15px">${c.date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</b><small>${fmt(c.from)} – ${fmt(c.to)} · ${+c.h.toFixed(1)}h</small></div>
+    <div class="px"><b>${money(c.gross)}</b>${S.taxPct ? `<small>~${money(takeHome(c.gross))} net</small>` : ''}</div></div>`).join('')}</div></section>` : ''}
+  ${spendCard()}
+  ${list.length > 3 ? `<section class="card">${secHead(d.toLocaleDateString(undefined, { month: 'long' }) + ' spending', `<span class="muted" style="font-size:14px;font-weight:650">${money(list.reduce((t, x) => t + x.amt, 0))}</span>`)}
+    <div class="shift-list" style="margin:0">${list.slice(0, 30).map(x => `<div class="shift-row" data-a="delSpend" data-id="${x.id}" style="cursor:pointer;grid-template-columns:1fr auto auto"><b>${esc(x.note || 'Expense')}</b><span class="muted" style="font-size:13px">${fmt(x.ts)}</span><span>$${(+x.amt).toFixed(2)}</span></div>`).join('')}</div></section>` : ''}
+  ${billsCard() || `<section class="card">${secHead('🧾 Bills', `<button class="link-btn" data-a="addBill">Add</button>`)}<div class="muted">Add rent, phone or subscriptions and Dash tracks what’s due next.</div></section>`}
+  ${stocksCard()}`;
+}
+
+/* ---------- search everything ---------- */
+function searchSheet() {
+  openSheet(`<div class="sheet-head"><div class="sheet-title" style="margin:0">Search</div><div class="spacer"></div><button class="ghost" data-a="closeSheet">Done</button></div>
+    <div class="search">${I.search}<input class="input" type="search" data-input="globalSearch" placeholder="Tasks, notes, habits, bills…" autocapitalize="off"></div>
+    <div id="gs" style="margin-top:12px;min-height:240px"><div class="muted">Type at least two letters.</div></div>`, { onMount: el => setTimeout(() => $('input', el).focus(), 350) });
+}
+function searchResults(q) {
+  q = q.toLowerCase().trim(); if (q.length < 2) return '<div class="muted">Type at least two letters.</div>';
+  const hit = v => String(v || '').toLowerCase().includes(q), rows = [];
+  S.tasks.filter(t => hit(t.text) || hit(t.tag)).sort((a, b) => a.done - b.done).slice(0, 8).forEach(t => rows.push(['editTask', t.id, t.done ? '☑️' : '✅', t.text, t.done ? 'Done' : (dueLabel(t.due) || { t: 'Task' }).t]));
+  S.notes.filter(n => hit(n.title) || hit(n.body)).slice(0, 6).forEach(n => rows.push(['openNote', n.id, '📝', n.title || n.body.slice(0, 40), 'Note']));
+  S.habits.filter(h => hit(h.name)).forEach(h => rows.push(['habitDetail', h.id, h.emoji, h.name, 'Habit']));
+  (S.bills || []).filter(b => hit(b.name)).forEach(b => rows.push(['editBill', b.id, b.emoji || '🧾', b.name, 'Bill']));
+  S.countdowns.filter(c => hit(c.title)).forEach(c => rows.push(['editCountdown', c.id, c.emoji, c.title, 'Countdown']));
+  S.links.filter(l => hit(l.title) || hit(l.url)).forEach(l => rows.push(['editLink', l.id, l.emoji || '🔗', l.title, 'Link']));
+  return rows.length ? `<div class="list" style="box-shadow:none">${rows.map(([a, id, ic, t, sub]) => `<button class="row" data-a="${a}" data-id="${id}"><span class="ic">${ic}</span><span class="row-title" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t)}</span><span class="v">${esc(sub)}</span></button>`).join('')}</div>` : '<div class="muted">Nothing found.</div>';
 }
 
 /* ---------- home layout: order + hidden cards ---------- */
@@ -1206,13 +1264,15 @@ function moodCard() {
 }
 
 function viewTasks() {
-  const t = dkey(), f = S.taskFilter;
-  const open = S.tasks.filter(x => !x.done).sort(taskSort);
+  const t = dkey(), f = S.taskFilter, used = (S.tags || []).filter(g => S.tasks.some(x => x.tag === g));
+  if (S.tagFilter && !used.includes(S.tagFilter)) S.tagFilter = '';
+  const pool = S.tagFilter ? S.tasks.filter(x => x.tag === S.tagFilter) : S.tasks;
+  const open = pool.filter(x => !x.done).sort(taskSort);
   let body = '';
   const group = (label, list, cls = '') => list.length ? `<div class="group-label ${cls}">${label}</div><section class="card" style="padding:4px 16px"><div class="task-list">${list.map(taskRow).join('')}</div></section>` : '';
   if (f === 'today') {
     const over = open.filter(x => x.due && x.due < t), today = open.filter(x => x.due === t);
-    const doneToday = S.tasks.filter(x => x.done && x.doneAt === t);
+    const doneToday = pool.filter(x => x.done && x.doneAt === t);
     body = group('Overdue', over, 'over') + group('Today', today) + group('Completed', doneToday);
     if (!over.length && !today.length) body = `<div class="empty card"><div class="big">🌤️</div><b>Nothing due today</b>Add something above, or enjoy the free time.</div>` + group('Completed', doneToday);
   } else if (f === 'upcoming') {
@@ -1224,17 +1284,18 @@ function viewTasks() {
     body = group('Scheduled', open.filter(x => x.due)) + group('Someday', open.filter(x => !x.due));
     if (!open.length) body = `<div class="empty card"><div class="big">🗂️</div><b>No open tasks</b>Your list is empty.</div>`;
   } else {
-    const done = S.tasks.filter(x => x.done).sort((a, b) => (b.doneTs || 0) - (a.doneTs || 0));
+    const done = pool.filter(x => x.done).sort((a, b) => (b.doneTs || 0) - (a.doneTs || 0));
     body = done.length ? group(`${done.length} completed`, done) + `<button class="btn danger" data-a="clearDone" style="margin-top:8px">Clear completed</button>`
       : `<div class="empty card"><div class="big">🏁</div><b>Nothing completed yet</b>Checked-off tasks land here.</div>`;
   }
   return `
   <header class="page-head"><h1>Tasks</h1>${open.length ? `<span class="count-pill">${open.length}</span>` : ''}</header>
   <form class="quick-add" data-form="quickTask" autocomplete="off">
-    <input class="input" id="qt" name="text" placeholder="Add a task… try “gym daily !”" enterkeyhint="done">
+    <input class="input" id="qt" name="text" placeholder="Add a task… try “essay tmr #school !”" enterkeyhint="done">
     <button class="add-btn" aria-label="Add task">${I.plus}</button>
   </form>
   <div class="seg">${[['today', 'Today'], ['upcoming', 'Upcoming'], ['all', 'All'], ['done', 'Done']].map(([k, l]) => `<button class="${f === k ? 'on' : ''}" data-a="taskFilter" data-f="${k}">${l}</button>`).join('')}</div>
+  ${used.length ? `<div class="chip-row tagbar">${['', ...used].map(g => `<button class="habit-chip ${(S.tagFilter || '') === g ? 'on' : ''}" data-a="tagFilter" data-v="${esc(g)}">${g ? esc(g) : 'All'}<small>${S.tasks.filter(x => !x.done && (!g || x.tag === g)).length}</small></button>`).join('')}</div>` : ''}
   <div>${body}</div>`;
 }
 
@@ -1427,7 +1488,7 @@ function viewSettings() {
 /* =========================================================
    RENDER / NAV
    ========================================================= */
-const VIEWS = { home: viewHome, tasks: viewTasks, habits: viewHabits, notes: viewNotes, settings: viewSettings };
+const VIEWS = { home: viewHome, tasks: viewTasks, habits: viewHabits, money: viewMoney, notes: viewNotes, settings: viewSettings };
 function render(animate = false) {
   const v = $('#view');
   const y = scrollY;
@@ -1441,7 +1502,7 @@ function renderTabs() {
   const tab = (k, label, icon, badge = 0) => `<button class="tab ${S.tab === k ? 'on' : ''}" data-a="tab" data-tab="${k}" aria-label="${label}">${icon}<span>${label}</span>${badge ? `<span class="badge">${badge}</span>` : ''}</button>`;
   $('#tabs').innerHTML = tab('home', 'Home', I.home) + tab('tasks', 'Tasks', I.tasks, due) +
     `<button class="fab" data-a="quickAdd" aria-label="Quick add">${I.plus}</button>` +
-    tab('habits', 'Habits', I.flame) + tab('notes', 'Notes', I.note);
+    tab('habits', 'Habits', I.flame) + tab('money', 'Money', I.card) + tab('notes', 'Notes', I.note);
 }
 function go(tab) {
   if (S.tab === tab) return scrollTo({ top: 0, behavior: 'smooth' });
@@ -1503,7 +1564,7 @@ function removeWithUndo(listName, id, label) {
 /* ---------- sheet forms ---------- */
 function taskSheet(t) {
   const isNew = !t;
-  t = t || { text: '', due: S.taskFilter === 'today' || S.tab === 'home' ? dkey() : '', priority: 0 };
+  t = t || { text: '', due: S.taskFilter === 'today' || S.tab === 'home' ? dkey() : '', priority: 0, tag: S.tab === 'tasks' ? S.tagFilter : '' };
   const opts = [['', 'No date'], [dkey(), 'Today'], [dkey(addDays(new Date(), 1)), 'Tomorrow'], [dkey(addDays(new Date(), 7)), 'Next week']];
   openSheet(`
   <form data-form="task" data-id="${t.id || ''}" autocomplete="off">
@@ -1520,6 +1581,11 @@ function taskSheet(t) {
       ${[[0, 'None'], [1, '! Medium'], [2, '!! High']].map(([v, l]) => `<button type="button" class="chip ${(t.priority || 0) === v ? 'on' : ''}" data-a="pickChip" data-v="${v}">${l}</button>`).join('')}
     </div>
     <input type="hidden" name="priority" value="${t.priority || 0}">
+    <label class="label">Tag</label>
+    <div class="chips" data-group="tag">
+      ${['', ...(S.tags || [])].map(v => `<button type="button" class="chip ${(t.tag || '') === v ? 'on' : ''}" data-a="pickChip" data-v="${esc(v)}">${v ? esc(v) : 'None'}</button>`).join('')}
+    </div>
+    <input type="hidden" name="tag" value="${esc(t.tag || '')}">
     <label class="label">Repeat</label>
     <div class="chips" data-group="repeat">
       ${[['', 'Never'], ...Object.entries(REPEATS)].map(([v, l]) => `<button type="button" class="chip ${(t.repeat || '') === v ? 'on' : ''}" data-a="pickChip" data-v="${v}">${l}</button>`).join('')}
@@ -1792,6 +1858,8 @@ const A = {
   },
   openPay: () => { payMonth = 0; paySheet(); },
   payNav: el => { payMonth += +el.dataset.n; const y = $('.sheet')?.scrollTop || 0; paySheet(); const sh = $('.sheet'); if (sh) { sh.style.transition = 'none'; sh.scrollTop = y; requestAnimationFrame(() => sh.style.transition = ''); } },
+  openSearch: () => searchSheet(),
+  tagFilter: el => { S.tagFilter = el.dataset.v; persist(); render(); },
   weeklyReview: () => weeklyReview(),
   customizeHome: () => customizeSheet(),
   layMove: el => {
@@ -1858,8 +1926,8 @@ const FORMS = {
     const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
     if (!d.text.trim()) return;
     const due = d.repeat && !d.due ? dkey() : d.due;
-    if (id) Object.assign(byId('tasks', id), { text: d.text.trim(), due, priority: +d.priority, repeat: d.repeat });
-    else S.tasks.push({ id: uid(), text: d.text.trim(), done: false, due, priority: +d.priority, repeat: d.repeat, created: Date.now() });
+    if (id) Object.assign(byId('tasks', id), { text: d.text.trim(), due, priority: +d.priority, repeat: d.repeat, tag: d.tag });
+    else S.tasks.push({ id: uid(), text: d.text.trim(), done: false, due, priority: +d.priority, repeat: d.repeat, tag: d.tag, created: Date.now() });
     save(); closeSheet(); render();
   },
   habit: f => {
@@ -1884,6 +1952,7 @@ const FORMS = {
 };
 
 const INPUTS = {
+  globalSearch: el => { const box = $('#gs'); if (box) box.innerHTML = searchResults(el.value); },
   intention: el => { S.intention = { date: dkey(), text: el.value }; save(); },
   noteSearch: el => { noteQuery = el.value; $('#notes-list').innerHTML = notesList(); },
   city: el => citySearch(el.value),

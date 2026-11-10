@@ -610,3 +610,16 @@ input.chip[type="date"] { min-height: 40px; color: var(--text); -webkit-appearan
 .rv-bar { height: 84px; border-radius: 10px; background: var(--surface-2); display: flex; align-items: flex-end; overflow: hidden; }
 .rv-bar i { display: block; width: 100%; background: var(--accent); border-radius: 10px; min-height: 0; }
 .rv-days small { font-size: 11px; font-weight: 700; color: var(--muted); display: block; margin-top: 5px; }
+
+/* ============ Brief, tags, money tab ============ */
+.hero { gap: 8px; }
+.brief { margin-top: 10px !important; }
+.brief .habit-chip { padding: 8px 12px; font-size: 13.5px; }
+.tagbar { margin-top: 10px !important; }
+.tag { padding: 1px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-weight: 650; font-size: 12px; }
+.tab { font-size: 10px; min-width: 0; }
+.fab { margin: 0 2px; width: 50px; height: 50px; }
+.stock > span + div { flex: 1; min-width: 0; }
+.link-btn { white-space: nowrap; flex: none; }
+.sec-head { gap: 10px; }
+.sec-head h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

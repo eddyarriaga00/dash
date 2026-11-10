@@ -546,3 +546,34 @@ input.chip[type="date"] { min-height: 40px; color: var(--text); -webkit-appearan
   font: 700 34px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-align: center;
   padding: 22px 10px; margin: 16px 0 4px; border-radius: 18px; background: var(--surface-2); -webkit-user-select: all; user-select: all;
 }
+
+/* ============ Work extras, week, pay, bills ============ */
+.tips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.tip { font-size: 13px; padding: 6px 10px; border-radius: 10px; background: var(--surface-2); color: var(--muted); }
+.tip b { color: var(--text); font-weight: 650; }
+.tip.hot { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--text); }
+.kit { margin-top: 12px; }
+.kit small { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.wk { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+.wkd { display: grid; justify-items: center; gap: 2px; padding: 8px 0 7px; border-radius: 14px; background: var(--surface-2); position: relative; min-width: 0; }
+.wkd small { font-size: 10.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+.wkd > b { font-size: 16px; font-weight: 700; }
+.wkd .blk, .wkd .blk2 { font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.wkd .blk2 { color: var(--muted); font-weight: 600; }
+.wkd .off { font-size: 11px; color: var(--faint); font-weight: 600; margin-top: 6px; }
+.wkd.has { background: var(--accent-soft); }
+.wkd.has .blk { color: var(--accent); }
+.wkd.t { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.wkd i { position: absolute; top: -4px; right: -3px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--danger); color: #fff; font-size: 10px; font-weight: 700; font-style: normal; display: grid; place-items: center; padding: 0 3px; }
+.pay { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pay > div { background: var(--surface-2); border-radius: 16px; padding: 12px 14px; }
+.pay b { display: block; font-size: 28px; font-weight: 750; letter-spacing: -.03em; }
+.pay small { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.stock small.soon { color: var(--warn); font-weight: 650; }
+.stock small.over { color: var(--danger); font-weight: 650; }
+.paid-btn { width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--surface-3); color: var(--faint); display: grid; place-items: center; flex: none; }
+.paid-btn svg.i { width: 16px; height: 16px; stroke-width: 3; }
+.paid-btn:active { background: var(--ok); border-color: var(--ok); color: #fff; }
+.qa-grid { grid-template-columns: repeat(5, 1fr); }
+.qa-grid button { font-size: 11.5px; padding: 12px 2px; }
+#bills .stock .px { min-width: 0; }

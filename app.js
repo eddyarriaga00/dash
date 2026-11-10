@@ -70,7 +70,9 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', stocks: 'SPY, AAPL, NVDA',
+  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', shiftLog: {}, rate: 0, unpaidBreak: 0, commute: 25, payday: '',
+  kit: 'Badge, Water bottle, Lunch, Charger, Headphones', kitDone: { date: '', items: [] }, bills: [], billPaid: {},
+  stocks: 'SPY, AAPL, NVDA',
   notes: [],
   links: [
     { id: uid(), title: 'Calendar', url: 'https://calendar.google.com', emoji: '📅' },
@@ -139,7 +141,7 @@ function adopt(data) {
 function merge(local, remote) {
   const dead = { ...(remote._deleted || {}), ...(local._deleted || {}) };
   const out = { ...remote, ...local, _deleted: dead };
-  for (const k of ['tasks', 'habits', 'notes', 'links', 'countdowns']) {
+  for (const k of ['tasks', 'habits', 'notes', 'links', 'countdowns', 'bills']) {
     const rmap = new Map((remote[k] || []).map(x => [x.id, x])), seen = new Set(), list = [];
     for (const x of local[k] || []) {
       const r = rmap.get(x.id); seen.add(x.id);
@@ -151,6 +153,8 @@ function merge(local, remote) {
     out[k] = list.filter(x => !dead[x.id]);
   }
   out.moods = { ...(remote.moods || {}), ...(local.moods || {}) };
+  out.shiftLog = { ...(remote.shiftLog || {}), ...(local.shiftLog || {}) };
+  out.billPaid = { ...(remote.billPaid || {}), ...(local.billPaid || {}) };
   const ss = { ...(remote.focus?.sessions || {}) };
   for (const [k, v] of Object.entries(local.focus?.sessions || {})) ss[k] = Math.max(v, ss[k] || 0);
   out.focus = { ...local.focus, sessions: ss };
@@ -692,10 +696,46 @@ async function loadCal(force) {
   }
   try { localStorage.setItem('dash.cal', JSON.stringify(CAL)); } catch { }
   calBusy = false;
-  const el = $('#work'); if (el) el.outerHTML = workCard(); else if (S.tab === 'home' && workCard()) softRender();
+  logShifts();
+  const el = $('#work'); if (el && $('#week')) { el.outerHTML = workCard(); $('#week').outerHTML = weekCard() || '<span id="week" hidden></span>'; const p = $('#pay'); if (p) p.outerHTML = payCard(); }
+  else if (S.tab === 'home' && workCard()) softRender();
 }
 const tm = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(':00', '').replace(/\s/g, ' ');
+const tshort = t => { const d = new Date(t), h = d.getHours(), m = d.getMinutes(); return `${h % 12 || 12}${m ? ':' + pad(m) : ''}${h < 12 ? 'a' : 'p'}`; };
 const dur = ms => { const h = ms / 36e5; return h >= 1 ? `${+h.toFixed(1)}h` : `${Math.round(ms / 6e4)}m`; };
+const money = n => '$' + Math.round(n).toLocaleString();
+// Work shifts currently known (today onward), limited to the chosen work calendar.
+function shifts() {
+  if (!calSrc() || CAL.url !== calSrc()) return [];
+  const cals = S.calUrl ? [] : shiftCals(), pick = cals.includes(S.workCal);
+  if (cals.length > 1 && !pick) return [];
+  return (CAL.events || []).filter(e => !pick || e.cal === S.workCal);
+}
+const paidHours = (start, end) => { const h = (end - start) / 36e5; return Math.max(0, h - (h >= 6 ? (S.unpaidBreak || 0) / 60 : 0)); };
+// Remember shifts so pay estimates still know about days that have passed.
+function logShifts() {
+  const now = Date.now(), log = { ...(S.shiftLog || {}) }, before = JSON.stringify(log), cutoff = now - 70 * 864e5;
+  for (const k in log) if (Date.parse(k) > now || Date.parse(k) < cutoff) delete log[k];
+  for (const e of shifts()) if (!e.allDay && e.end) log[new Date(e.start).toISOString()] = +((e.end - e.start) / 36e5).toFixed(2);
+  if (JSON.stringify(log) !== before) { S.shiftLog = log; save(); }
+}
+// Paid hours between two times, from the log (past) and the live schedule (future).
+function hoursBetween(from, to) {
+  let h = 0;
+  for (const [k, v] of Object.entries(S.shiftLog || {})) { const t = Date.parse(k); if (t >= from && t < to) h += Math.max(0, v - (v >= 6 ? (S.unpaidBreak || 0) / 60 : 0)); }
+  return h;
+}
+const weekStart = (d = new Date()) => { const x = parseKey(dkey(d)); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x.getTime(); };
+function nextPayday() {
+  if (!S.payday) return null;
+  const a = parseKey(S.payday), n = Math.max(0, Math.ceil(dayDiff(a, new Date()) / 14));
+  return addDays(a, n * 14);
+}
+function hourlyAt(t) {
+  const d = W.sig === locSig() && W.data; if (!d) return null;
+  const x = new Date(t), i = d.hourly.time.indexOf(`${dkey(x)}T${pad(x.getHours())}:00`);
+  return i < 0 ? null : { temp: Math.round(d.hourly.temperature_2m[i]), rain: d.hourly.precipitation_probability[i], icon: wmo(d.hourly.weather_code[i], d.hourly.is_day[i]).icon };
+}
 function workCard() {
   const src = calSrc(), mine = CAL.url === src;
   if (!src || (!S.calUrl && !(mine && CAL.at))) return '';
@@ -703,20 +743,84 @@ function workCard() {
   if (cals.length > 1 && !cals.includes(S.workCal)) return `<section class="card" id="work">${secHead('💼 Work')}
     <div class="muted" style="margin-bottom:10px">Which calendar has your shifts?</div>
     <div class="chips">${cals.map(c => `<button class="chip" data-a="setWorkCal" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></section>`;
-  const now = Date.now(), evs = (mine && CAL.events || []).filter(e => (e.end || e.start + 36e5) > now && (!cals.includes(S.workCal) || e.cal === S.workCal));
-  const head = secHead('💼 Work', !S.calUrl ? `<button class="link-btn" data-a="updateShifts">Update</button>` : evs.length ? `<span class="muted" style="font-size:13px;font-weight:600">${dur(evs.filter(e => e.start < now + 7 * 864e5 && !e.allDay).reduce((a, e) => a + ((e.end || e.start) - e.start), 0))} next 7 days</span>` : '');
+  const now = Date.now(), all = shifts(), evs = all.filter(e => (e.end || e.start + 36e5) > now);
+  const head = secHead('💼 Work', !S.calUrl ? `<button class="link-btn" data-a="updateShifts">Update</button>` : '');
   if (!evs.length) return `<section class="card" id="work">${head}<div class="muted">${CAL.error && S.calUrl ? 'Couldn’t load your schedule from that link.' : mine ? `No shifts coming up 🎉${CAL.at && now - CAL.at > 3 * 864e5 ? ' (last update from your iPhone was ' + ago(CAL.at).toLowerCase() + ')' : ''}` : 'Loading your schedule…'}</div></section>`;
   const dayName = t => { const n = dayDiff(new Date(), new Date(t)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
   const range = e => e.allDay ? 'All day' : `${tm(e.start)} – ${tm(e.end || e.start)}`;
-  const [n, ...rest] = evs, on = n.start <= now && !n.allDay;
+  const [n, ...rest] = evs, on = n.start <= now && !n.allDay, soon = !n.allDay && !on && n.start - now < 30 * 36e5;
   const status = n.allDay ? dayName(n.start) : on ? `On shift · ${dur(n.end - now)} left` : n.start - now < 864e5 ? `Starts in ${dur(n.start - now)}` : dayName(n.start);
+
+  // Helpful times around the shift
+  const tips = [];
+  if (soon) {
+    const leave = n.start - (S.commute || 0) * 6e4;
+    if (S.commute) tips.push(`<span class="tip ${leave - now < 30 * 6e4 && leave > now ? 'hot' : ''}">🚗 Leave by <b>${tm(leave)}</b></span>`);
+    const w = hourlyAt(n.start); if (w) tips.push(`<span class="tip">${w.icon} <b>${w.temp}°</b> going in${w.rain >= 30 ? ` · ${w.rain}% rain` : ''}</span>`);
+  }
+  if ((on || soon) && n.end) { const w = hourlyAt(n.end); if (w) tips.push(`<span class="tip">${w.icon} <b>${w.temp}°</b> heading home${w.rain >= 30 ? ` · ${w.rain}% rain` : ''}</span>`); }
+  const tmrKey = dkey(addDays(new Date(), 1)), early = all.find(e => !e.allDay && dkey(new Date(e.start)) === tmrKey && new Date(e.start).getHours() < 12);
+  if (early) tips.push(`<span class="tip">😴 Bed by <b>${tm(early.start - ((S.commute || 0) + 45) * 6e4 - 8 * 36e5)}</b> for tomorrow’s ${tm(early.start)}</span>`);
+  const off = Array.from({ length: 14 }, (_, i) => addDays(new Date(), i)).find(d => !all.some(e => dkey(new Date(e.start)) === dkey(d)));
+  if (off && dayDiff(new Date(), off) > 0) tips.push(`<span class="tip">🏖️ Next day off <b>${dayDiff(new Date(), off) === 1 ? 'tomorrow' : off.toLocaleDateString(undefined, { weekday: 'long' })}</b></span>`);
+
+  // Pre-shift checklist, on shift days until the shift ends
+  const kit = (S.kit || '').split(',').map(x => x.trim()).filter(Boolean), today = dkey();
+  const done = S.kitDone && S.kitDone.date === today ? S.kitDone.items : [];
+  const showKit = kit.length && dkey(new Date(n.start)) === today && !on;
   return `<section class="card" id="work">${head}
     <div class="shift ${on ? 'on' : ''}">
       <div class="shift-when"><b>${dayName(n.start)}</b><span>${range(n)}</span></div>
       <div class="shift-meta"><span class="pill ${on ? 'live' : ''}">${status}</span><span class="muted">${esc(n.loc || n.title || '')}${!n.allDay && n.end ? ` · ${dur(n.end - n.start)}` : ''}</span></div>
       ${on ? `<div class="progress" style="margin:12px 0 0"><i style="width:${Math.min(100, (now - n.start) / (n.end - n.start) * 100)}%"></i></div>` : ''}
     </div>
-    ${rest.length ? `<div class="shift-list">${rest.slice(0, 5).map(e => `<div class="shift-row"><b>${dayName(e.start)}</b><span>${range(e)}</span><span class="muted">${e.allDay || !e.end ? esc(e.title || '') : dur(e.end - e.start)}</span></div>`).join('')}</div>` : ''}
+    ${tips.length ? `<div class="tips">${tips.join('')}</div>` : ''}
+    ${showKit ? `<div class="kit"><small>${done.length >= kit.length ? 'Ready to go ✓' : 'Before you go'}</small><div class="chip-row" style="margin-top:6px">${kit.map(k => `<button class="habit-chip ${done.includes(k) ? 'on' : ''}" data-a="kitToggle" data-v="${esc(k)}">${done.includes(k) ? '✓ ' : ''}${esc(k)}</button>`).join('')}</div></div>` : ''}
+    ${rest.length ? `<div class="shift-list">${rest.slice(0, 4).map(e => `<div class="shift-row"><b>${dayName(e.start)}</b><span>${range(e)}</span><span class="muted">${e.allDay || !e.end ? esc(e.title || '') : dur(e.end - e.start)}</span></div>`).join('')}</div>` : ''}
+  </section>`;
+}
+// 7-day strip: shifts, days off and tasks due, at a glance.
+function weekCard() {
+  const all = shifts(); if (!all.length) return '';
+  const days = Array.from({ length: 7 }, (_, i) => addDays(new Date(), i));
+  let hrs = 0, count = 0;
+  const cells = days.map((d, i) => {
+    const k = dkey(d), sh = all.filter(e => !e.allDay && dkey(new Date(e.start)) === k), due = S.tasks.filter(t => !t.done && t.due === k).length;
+    sh.forEach(e => { hrs += ((e.end || e.start) - e.start) / 36e5; count++; });
+    return `<div class="wkd ${i === 0 ? 't' : ''} ${sh.length ? 'has' : ''}"><small>${d.toLocaleDateString(undefined, { weekday: 'short' })}</small><b>${d.getDate()}</b>
+      ${sh.length ? `<span class="blk">${tshort(sh[0].start)}</span><span class="blk2">${tshort(sh[sh.length - 1].end || sh[0].start)}</span>` : '<span class="off">Off</span>'}
+      ${due ? `<i>${due}</i>` : ''}</div>`;
+  }).join('');
+  return `<section class="card" id="week">${secHead('Next 7 days', `<span class="muted" style="font-size:13px;font-weight:600">${count} shift${count === 1 ? '' : 's'} · ${+hrs.toFixed(1)}h</span>`)}<div class="wk">${cells}</div></section>`;
+}
+function payCard() {
+  if (!S.rate) return '';
+  const ws = weekStart(), wk = 7 * 864e5, h1 = hoursBetween(ws, ws + wk), h2 = hoursBetween(ws + wk, ws + 2 * wk), pd = nextPayday();
+  const worked = hoursBetween(ws, Date.now());
+  return `<section class="card" id="pay">${secHead('💵 Pay estimate', `<span class="muted" style="font-size:13px;font-weight:600">before taxes</span>`)}
+    <div class="pay"><div><b>${money(h1 * S.rate)}</b><small>this week · ${+h1.toFixed(1)}h</small></div><div><b>${money(h2 * S.rate)}</b><small>next week · ${+h2.toFixed(1)}h</small></div></div>
+    <div class="progress" style="margin:14px 0 8px"><i style="width:${h1 ? Math.min(100, worked / h1 * 100) : 0}%"></i></div>
+    <div class="shift-meta" style="margin:0"><span class="muted">${money(worked * S.rate)} earned so far this week</span>${pd ? `<span class="pill" style="margin-left:auto">Payday ${dayDiff(new Date(), pd) === 0 ? 'today 🎉' : 'in ' + dayDiff(new Date(), pd) + 'd'}</span>` : ''}</div>
+  </section>`;
+}
+// Bills: monthly, due on a day of the month.
+function billDue(b) {
+  const now = new Date(), ym = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+  const on = (y, m) => new Date(y, m, Math.min(b.day, new Date(y, m + 1, 0).getDate()));
+  let d = on(now.getFullYear(), now.getMonth());
+  if ((S.billPaid || {})[b.id] === ym(d)) d = on(now.getFullYear(), now.getMonth() + 1);
+  return { date: d, ym: ym(d), days: dayDiff(now, d) };
+}
+function billsCard() {
+  const list = (S.bills || []).map(b => ({ ...b, due: billDue(b) })).sort((a, b) => a.due.days - b.due.days);
+  if (!list.length) return '';
+  const total = list.reduce((a, b) => a + (+b.amount || 0), 0);
+  return `<section class="card" id="bills">${secHead('🧾 Bills', `<button class="link-btn" data-a="addBill">Add</button>`)}
+    <div class="stock-list">${list.slice(0, 6).map(b => { const n = b.due.days; return `<div class="stock">
+      <div data-a="editBill" data-id="${b.id}" style="cursor:pointer"><b>${b.emoji || '🧾'} ${esc(b.name)}</b><small class="${n < 0 ? 'over' : n <= 3 ? 'soon' : ''}">${n < 0 ? `${-n}d overdue` : n === 0 ? 'Due today' : n === 1 ? 'Due tomorrow' : `Due ${b.due.date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${n}d`}</small></div>
+      <div class="px"><b>${b.amount ? '$' + (+b.amount).toLocaleString(undefined, { maximumFractionDigits: 2 }) : ''}</b></div>
+      <button class="paid-btn" data-a="payBill" data-id="${b.id}" data-ym="${b.due.ym}" aria-label="Mark paid">${I.check}</button></div>`; }).join('')}</div>
+    ${total ? `<div class="muted" style="font-size:13px;margin-top:10px">${money(total)} a month across ${list.length} bill${list.length === 1 ? '' : 's'}</div>` : ''}
   </section>`;
 }
 
@@ -861,6 +965,8 @@ function viewHome() {
   ${weatherCard()}
 
   ${workCard()}
+  ${weekCard() || '<span id="week" hidden></span>'}
+  ${payCard()}
 
   <section class="card">
     <div class="today">
@@ -887,6 +993,7 @@ function viewHome() {
     <div class="chip-row">${[...S.habits].sort((a, b) => hDone(a, t) - hDone(b, t) || byWhen(a, b)).map(x => `<button class="habit-chip ${hDone(x, t) ? 'on' : ''}" data-a="toggleHabit" data-id="${x.id}" data-day="${t}"><span>${x.emoji}</span>${esc(x.name)}${hTarget(x) > 1 ? `<small>${hCount(x, t)}/${hTarget(x)}</small>` : ''}</button>`).join('')}</div>
   </section>` : ''}
 
+  ${billsCard()}
   ${nbaCard()}
   ${animeCard()}
   ${stocksCard()}
@@ -1098,6 +1205,22 @@ function viewSettings() {
     <div class="pad muted" style="font-size:13px">Tap 1 on your iPhone, tap <b>Download</b>, then open the downloaded file and tap <b>Add Shortcut</b>. After that, tap 2 whenever you want fresh shifts. The first run asks to allow Calendar access.</div>
     <div class="pad" style="padding-bottom:8px"><input class="input" data-change="calUrl" value="${esc(S.calUrl || '')}" placeholder="Or paste a public calendar link" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
     <div class="pad muted" style="font-size:13px;padding-top:0">Only for normal calendar feeds (school, Google, iCloud). Leave empty to use the shortcut.</div>
+  </div>
+
+  <div class="settings-label">Work & pay</div>
+  <div class="list">
+    ${row('💵', 'Hourly pay ($)', `<input class="inline num" type="number" inputmode="decimal" min="0" step="0.01" data-change="rate" value="${S.rate || ''}" placeholder="0">`)}
+    ${row('🥪', 'Unpaid break (min)', `<input class="inline num" type="number" inputmode="numeric" min="0" max="120" data-change="unpaidBreak" value="${S.unpaidBreak || ''}" placeholder="0">`)}
+    ${row('📆', 'A payday', `<input class="inline" type="date" data-change="payday" value="${esc(S.payday || '')}" style="width:auto">`)}
+    ${row('🚗', 'Commute (min)', `<input class="inline num" type="number" inputmode="numeric" min="0" max="180" data-change="commute" value="${S.commute || ''}" placeholder="0">`)}
+    <div class="pad" style="padding-bottom:6px"><div class="muted" style="font-size:13px;margin-bottom:8px">Before-work checklist (comma separated)</div><input class="input" data-change="kit" value="${esc(S.kit || '')}" placeholder="Badge, Water bottle, Lunch"></div>
+    <div class="pad muted" style="font-size:13px;padding-top:4px">Pay is an estimate before taxes. Unpaid break is taken off shifts of 6 hours or more. Pick any one payday and Dash counts every two weeks from it.</div>
+  </div>
+
+  <div class="settings-label">Bills</div>
+  <div class="list">
+    ${(S.bills || []).map(b => row(b.emoji || '🧾', esc(b.name), `<span class="v">${b.amount ? '$' + esc(b.amount) + ' · ' : ''}day ${b.day}${I.chev}</span>`, 'editBill', `data-id="${b.id}"`)).join('')}
+    ${row('➕', '<span class="accent">Add a bill or subscription</span>', '', 'addBill')}
   </div>
 
   <div class="settings-label">Weather</div>
@@ -1343,6 +1466,22 @@ function noteSheet(id) {
   });
 }
 
+function billSheet(b) {
+  const isNew = !b; b = b || { name: '', amount: '', day: new Date().getDate(), emoji: '🧾' };
+  openSheet(`
+  <form data-form="bill" data-id="${b.id || ''}" autocomplete="off">
+    <div class="sheet-title">${isNew ? 'New bill' : 'Edit bill'}</div>
+    <input class="input lg" name="name" value="${esc(b.name)}" placeholder="Phone, rent, Spotify…" required maxlength="30">
+    <div class="grid2" style="margin-top:10px">
+      <div><label class="label" style="margin-top:6px">Amount ($)</label><input class="input" name="amount" type="number" inputmode="decimal" min="0" step="0.01" value="${esc(b.amount)}" placeholder="Optional"></div>
+      <div><label class="label" style="margin-top:6px">Due day of month</label><input class="input" name="day" type="number" inputmode="numeric" min="1" max="31" value="${b.day}" required></div>
+    </div>
+    <label class="label">Icon</label>${emojiPicker(['🧾', '📱', '🏠', '🚗', '⛽', '💳', '🎵', '📺', '🎮', '🛡️', '💪', '☁️', '🎓', '⚡', '🌐', '🍎'], b.emoji)}
+    <div class="btn-row"><button class="btn">${isNew ? 'Add bill' : 'Save'}</button>
+      ${isNew ? '' : `<button type="button" class="btn danger" data-a="deleteBill" data-id="${b.id}">Delete bill</button>`}</div>
+  </form>`, { onMount: el => isNew && setTimeout(() => $('[name=name]', el).focus(), 350) });
+}
+
 function quickAddSheet() {
   openSheet(`
   <form data-form="quick" autocomplete="off">
@@ -1354,6 +1493,7 @@ function quickAddSheet() {
     <button data-a="addHabit"><span>🔥</span>Habit</button>
     <button data-a="addLink"><span>🔗</span>Link</button>
     <button data-a="addCountdown"><span>⏳</span>Countdown</button>
+    <button data-a="addBill"><span>🧾</span>Bill</button>
   </div>`, { onMount: el => setTimeout(() => $('input', el).focus(), 350) });
 }
 
@@ -1465,7 +1605,19 @@ const A = {
     if (!SY.vault) { await enableSync(); if (!SY.vault || syncStatus !== 'ok') return toast('Couldn’t turn on sync — try again'); }
     CAL.ts = 0; runShortcut();
   },
-  setWorkCal: el => { S.workCal = el.dataset.v; save(); render(); },
+  setWorkCal: el => { S.workCal = el.dataset.v; save(); logShifts(); render(); },
+  kitToggle: el => {
+    const t = dkey(), v = el.dataset.v, cur = S.kitDone && S.kitDone.date === t ? S.kitDone.items : [];
+    S.kitDone = { date: t, items: cur.includes(v) ? cur.filter(x => x !== v) : [...cur, v] }; save(); render();
+  },
+  addBill: () => billSheet(),
+  editBill: el => billSheet(byId('bills', el.dataset.id)),
+  deleteBill: el => removeWithUndo('bills', el.dataset.id, 'Bill'),
+  payBill: el => {
+    const id = el.dataset.id, prev = (S.billPaid || {})[id];
+    S.billPaid = { ...(S.billPaid || {}), [id]: el.dataset.ym }; save(); render();
+    toast('Marked paid', () => { if (prev) S.billPaid[id] = prev; else delete S.billPaid[id]; save(); render(); });
+  },
   disableSync: () => {
     if (!confirm('Stop syncing on this device? Your data stays here and in the cloud.')) return;
     SY = {}; saveSY(); syncStatus = 'off'; render(); toast('Sync turned off here');
@@ -1477,6 +1629,18 @@ const A = {
 };
 
 const FORMS = {
+  bill: f => {
+    const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
+    const v = { name: d.name.trim(), amount: d.amount ? String(+d.amount) : '', day: Math.max(1, Math.min(31, +d.day || 1)), emoji: d.emoji || '🧾' };
+    S.bills = S.bills || [];
+    if (id) Object.assign(byId('bills', id), v);
+    else {
+      const nb = { id: uid(), ...v }; S.bills.push(nb);
+      // A new bill whose day already passed this month starts counting from next month.
+      const due = billDue(nb); if (due.days < 0) S.billPaid = { ...(S.billPaid || {}), [nb.id]: due.ym };
+    }
+    save(); closeSheet(); render();
+  },
   joinSync: f => joinSync(f.elements.code.value),
   quickTask: f => { addTask(f.elements.text.value, S.taskFilter === 'today' ? dkey() : ''); render(); $('#qt')?.focus(); },
   quick: f => { const v = f.elements.text.value; if (!v.trim()) return; addTask(v, dkey()); closeSheet(); render(); toast('Task added'); },
@@ -1519,6 +1683,11 @@ const INPUTS = {
   },
 };
 const CHANGES = {
+  rate: el => { S.rate = Math.max(0, +el.value || 0); save(); },
+  unpaidBreak: el => { S.unpaidBreak = Math.max(0, Math.min(120, +el.value || 0)); save(); },
+  commute: el => { S.commute = Math.max(0, Math.min(180, +el.value || 0)); save(); },
+  payday: el => { S.payday = el.value; save(); },
+  kit: el => { S.kit = el.value.split(',').map(x => x.trim()).filter(Boolean).join(', '); el.value = S.kit; save(); },
   wNba: el => { S.widgets.nba = el.checked; save(); },
   wAnime: el => { S.widgets.anime = el.checked; save(); },
   team: el => { S.team = el.value; save(); },

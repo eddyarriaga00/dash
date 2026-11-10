@@ -71,3 +71,22 @@ revoke execute on function public.dash_set_shifts(text, text) from public;
 revoke execute on function public.dash_shifts(text) from public;
 grant execute on function public.dash_set_shifts(text, text) to anon, authenticated;
 grant execute on function public.dash_shifts(text) to anon, authenticated;
+
+-- Accounts: maps a verified sign-in ("google:<id>" / "github:<id>") to a vault.
+-- Only the dash-auth edge function (service role) can touch these tables.
+create table if not exists public.dash_accounts (
+  identity   text primary key,
+  vault      text not null,
+  name       text,
+  created_at timestamptz not null default now()
+);
+create table if not exists public.dash_tickets (
+  ticket   text primary key,
+  identity text not null,
+  name     text,
+  expires  timestamptz not null
+);
+alter table public.dash_accounts enable row level security;
+alter table public.dash_tickets enable row level security;
+revoke all on public.dash_accounts, public.dash_tickets from anon, authenticated;
+grant select, insert, update, delete on public.dash_accounts, public.dash_tickets to service_role;

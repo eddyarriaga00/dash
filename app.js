@@ -70,7 +70,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', shiftLog: {}, rate: 0, unpaidBreak: 0, commute: 25, payday: '',
+  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
   kit: 'Badge, Water bottle, Lunch, Charger, Headphones', kitDone: { date: '', items: [] }, bills: [], billPaid: {},
   stocks: 'SPY, AAPL, NVDA',
   notes: [],
@@ -725,7 +725,27 @@ function hoursBetween(from, to) {
   for (const [k, v] of Object.entries(S.shiftLog || {})) { const t = Date.parse(k); if (t >= from && t < to) h += Math.max(0, v - (v >= 6 ? (S.unpaidBreak || 0) / 60 : 0)); }
   return h;
 }
-const weekStart = (d = new Date()) => { const x = parseKey(dkey(d)); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x.getTime(); };
+// Pay weeks run Sunday to Saturday; over 40 paid hours in a week earns time and a half.
+const weekStart = (d = new Date()) => { const x = parseKey(dkey(d)); x.setDate(x.getDate() - x.getDay()); return x.getTime(); };
+const WEEK = 7 * 864e5;
+function weekPay(start) {
+  const end = addDays(new Date(start), 7).getTime(), h = hoursBetween(start, end), ot = Math.max(0, h - 40);
+  return { start, end, h, ot, gross: (h + ot * 0.5) * (S.rate || 0) };
+}
+const takeHome = g => g * (1 - Math.min(60, S.taxPct || 0) / 100);
+const dayPaid = k => { const a = parseKey(k).getTime(); return hoursBetween(a, addDays(new Date(a), 1).getTime()); };
+// A paycheck covers the two Sunday–Saturday weeks that end on the Saturday before payday.
+function paychecks(from, count) {
+  const first = nextPayday(); if (!first) return [];
+  const out = []; let p = first; while (dayDiff(new Date(from), p) > 13) p = addDays(p, -14);
+  while (dayDiff(p, new Date(from)) > 0) p = addDays(p, 14);
+  for (let i = 0; i < count; i++, p = addDays(p, 14)) {
+    const sat = addDays(p, -((p.getDay() + 1) % 7 || 7)), w2 = weekStart(sat), w1 = addDays(new Date(w2), -7).getTime();
+    const a = weekPay(w1), b = weekPay(w2);
+    out.push({ date: p, from: w1, to: sat, h: a.h + b.h, ot: a.ot + b.ot, gross: a.gross + b.gross });
+  }
+  return out;
+}
 function nextPayday() {
   if (!S.payday) return null;
   const a = parseKey(S.payday), n = Math.max(0, Math.ceil(dayDiff(a, new Date()) / 14));
@@ -744,7 +764,7 @@ function workCard() {
     <div class="muted" style="margin-bottom:10px">Which calendar has your shifts?</div>
     <div class="chips">${cals.map(c => `<button class="chip" data-a="setWorkCal" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></section>`;
   const now = Date.now(), all = shifts(), evs = all.filter(e => (e.end || e.start + 36e5) > now);
-  const head = secHead('💼 Work', !S.calUrl ? `<button class="link-btn" data-a="updateShifts">Update</button>` : '');
+  const head = secHead(`💼 ${S.job ? esc(S.job) : 'Work'}`, !S.calUrl ? `<button class="link-btn" data-a="updateShifts">Update</button>` : '');
   if (!evs.length) return `<section class="card" id="work">${head}<div class="muted">${CAL.error && S.calUrl ? 'Couldn’t load your schedule from that link.' : mine ? `No shifts coming up 🎉${CAL.at && now - CAL.at > 3 * 864e5 ? ' (last update from your iPhone was ' + ago(CAL.at).toLowerCase() + ')' : ''}` : 'Loading your schedule…'}</div></section>`;
   const dayName = t => { const n = dayDiff(new Date(), new Date(t)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
   const range = e => e.allDay ? 'All day' : `${tm(e.start)} – ${tm(e.end || e.start)}`;
@@ -795,14 +815,53 @@ function weekCard() {
 }
 function payCard() {
   if (!S.rate) return '';
-  const ws = weekStart(), wk = 7 * 864e5, h1 = hoursBetween(ws, ws + wk), h2 = hoursBetween(ws + wk, ws + 2 * wk), pd = nextPayday();
-  const worked = hoursBetween(ws, Date.now());
-  return `<section class="card" id="pay">${secHead('💵 Pay estimate', `<span class="muted" style="font-size:13px;font-weight:600">before taxes</span>`)}
-    <div class="pay"><div><b>${money(h1 * S.rate)}</b><small>this week · ${+h1.toFixed(1)}h</small></div><div><b>${money(h2 * S.rate)}</b><small>next week · ${+h2.toFixed(1)}h</small></div></div>
-    <div class="progress" style="margin:14px 0 8px"><i style="width:${h1 ? Math.min(100, worked / h1 * 100) : 0}%"></i></div>
-    <div class="shift-meta" style="margin:0"><span class="muted">${money(worked * S.rate)} earned so far this week</span>${pd ? `<span class="pill" style="margin-left:auto">Payday ${dayDiff(new Date(), pd) === 0 ? 'today 🎉' : 'in ' + dayDiff(new Date(), pd) + 'd'}</span>` : ''}</div>
+  const ws = weekStart(), cur = weekPay(ws), next = weekPay(addDays(new Date(ws), 7).getTime()), pd = nextPayday();
+  const worked = hoursBetween(ws, Date.now()), check = paychecks(Date.now(), 1)[0];
+  return `<section class="card pressable" id="pay" data-a="openPay" style="cursor:pointer">${secHead('💵 Pay estimate', `<span class="link-btn">Calendar</span>`)}
+    <div class="pay"><div><b>${money(cur.gross)}</b><small>this week · ${+cur.h.toFixed(1)}h${cur.ot ? ' · OT' : ''}</small></div><div><b>${money(next.gross)}</b><small>next week · ${+next.h.toFixed(1)}h${next.ot ? ' · OT' : ''}</small></div></div>
+    <div class="progress" style="margin:14px 0 8px"><i style="width:${cur.h ? Math.min(100, worked / cur.h * 100) : 0}%"></i></div>
+    <div class="shift-meta" style="margin:0"><span class="muted">${money(worked * S.rate)} earned so far${S.taxPct ? ` · ~${money(takeHome(cur.gross))} take-home` : ''}</span>${pd ? `<span class="pill" style="margin-left:auto">${check && check.gross ? money(check.gross) + ' · ' : ''}${dayDiff(new Date(), pd) === 0 ? 'payday 🎉' : 'in ' + dayDiff(new Date(), pd) + 'd'}</span>` : ''}</div>
   </section>`;
 }
+let payMonth = 0;
+function paySheet() {
+  const now = new Date(), first = new Date(now.getFullYear(), now.getMonth() + payMonth, 1), y = first.getFullYear(), m = first.getMonth();
+  const days = new Date(y, m + 1, 0).getDate(), today = dkey();
+  const paydays = new Set(paychecks(addDays(first, -14), 6).map(c => dkey(c.date)));
+  let cells = '<i></i>'.repeat(first.getDay()), mh = 0, mShifts = 0;
+  for (let d = 1; d <= days; d++) {
+    const k = dkey(new Date(y, m, d)), h = dayPaid(k); if (h) { mh += h; mShifts++; }
+    cells += `<div class="pc ${h ? 'has' : ''} ${k === today ? 't' : ''}"><b>${d}</b>${h ? `<span>${+h.toFixed(1)}h</span><small>${money(h * S.rate)}</small>` : ''}${paydays.has(k) ? '<em>💵</em>' : ''}</div>`;
+  }
+  // Weeks that touch this month
+  const weeks = []; let mGross = 0;
+  for (let w = weekStart(first); w < new Date(y, m + 1, 1).getTime(); w = addDays(new Date(w), 7).getTime()) { const x = weekPay(w); weeks.push(x); }
+  weeks.forEach(x => mGross += x.gross);
+  const fmt = t => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const thisWeek = weekStart();
+  const checks = paychecks(first, 3).filter(c => c.date.getMonth() === m || c.gross);
+  openSheet(`
+    <div class="sheet-head"><div><div class="sheet-title" style="margin:0">Pay</div><div class="muted" style="font-size:13px">${S.job ? esc(S.job) + ' · ' : ''}$${(+S.rate).toFixed(2)}/hr${S.taxPct ? ` · ${S.taxPct}% withheld` : ' · before taxes'}</div></div><div class="spacer"></div><button class="ghost" data-a="closeSheet">Done</button></div>
+    <div class="pmonth"><button class="icon-btn" data-a="payNav" data-n="-1" aria-label="Previous month" style="transform:scaleX(-1)">${I.chev}</button><b>${first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</b><button class="icon-btn" data-a="payNav" data-n="1" aria-label="Next month">${I.chev}</button></div>
+    <div class="pgrid head">${'SMTWTFS'.split('').map(c => `<small>${c}</small>`).join('')}</div>
+    <div class="pgrid">${cells}</div>
+    <div class="stat-grid" style="margin-top:14px">
+      <div class="stat"><small>Shifts</small><b>${mShifts}</b></div>
+      <div class="stat"><small>Paid hours</small><b>${+mh.toFixed(1)}</b></div>
+      <div class="stat"><small>${S.taxPct ? 'Take-home' : 'Gross'}</small><b>${money(S.taxPct ? takeHome(mh * S.rate) : mh * S.rate)}</b></div>
+    </div>
+    <label class="label">By week (Sun–Sat)</label>
+    <div class="list" style="box-shadow:none">${weeks.map(x => `<div class="row ${x.start === thisWeek ? 'now' : ''}"><div><div class="row-title">${fmt(x.start)} – ${fmt(x.end - 864e5)}${x.start === thisWeek ? ' <span class="pill live" style="font-size:11px">this week</span>' : ''}</div>
+      <div class="muted" style="font-size:13px">${x.h ? `${+x.h.toFixed(1)}h${x.ot ? ` · ${+x.ot.toFixed(1)}h overtime at 1.5×` : ''}` : 'No shifts'}</div></div>
+      <div class="v" style="display:block;text-align:right"><b style="color:var(--text);font-size:17px">${x.h ? money(x.gross) : '—'}</b>${S.taxPct && x.h ? `<div style="font-size:12px">~${money(takeHome(x.gross))} net</div>` : ''}</div></div>`).join('')}</div>
+    ${checks.length ? `<label class="label">Paychecks</label>
+    <div class="list" style="box-shadow:none">${checks.map(c => `<div class="row"><span class="ic">💵</span><div><div class="row-title">${c.date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+      <div class="muted" style="font-size:13px">for ${fmt(c.from)} – ${fmt(c.to)} · ${+c.h.toFixed(1)}h</div></div>
+      <div class="v" style="display:block;text-align:right"><b style="color:var(--text);font-size:17px">${c.h ? money(c.gross) : '—'}</b>${S.taxPct && c.h ? `<div style="font-size:12px">~${money(takeHome(c.gross))} net</div>` : ''}</div></div>`).join('')}</div>`
+    : `<p class="muted" style="font-size:13px;margin-top:14px">Add one payday in Settings → Work & pay to see each paycheck.</p>`}
+    <p class="muted" style="font-size:12.5px;margin-top:14px">Estimates only. Dash knows the shifts your iPhone has sent: about two weeks ahead, and past days from when you started using it.${S.unpaidBreak ? ` ${S.unpaidBreak} min unpaid break taken off shifts of 6h or more.` : ''}</p>`, { full: false });
+}
+
 // Bills: monthly, due on a day of the month.
 function billDue(b) {
   const now = new Date(), ym = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
@@ -1209,12 +1268,14 @@ function viewSettings() {
 
   <div class="settings-label">Work & pay</div>
   <div class="list">
+    ${row('🪪', 'Job title', `<input class="inline" data-change="job" value="${esc(S.job || '')}" placeholder="Optional" maxlength="30">`)}
     ${row('💵', 'Hourly pay ($)', `<input class="inline num" type="number" inputmode="decimal" min="0" step="0.01" data-change="rate" value="${S.rate || ''}" placeholder="0">`)}
     ${row('🥪', 'Unpaid break (min)', `<input class="inline num" type="number" inputmode="numeric" min="0" max="120" data-change="unpaidBreak" value="${S.unpaidBreak || ''}" placeholder="0">`)}
+    ${row('🏛️', 'Taxes withheld (%)', `<input class="inline num" type="number" inputmode="decimal" min="0" max="60" data-change="taxPct" value="${S.taxPct || ''}" placeholder="0">`)}
     ${row('📆', 'A payday', `<input class="inline" type="date" data-change="payday" value="${esc(S.payday || '')}" style="width:auto">`)}
     ${row('🚗', 'Commute (min)', `<input class="inline num" type="number" inputmode="numeric" min="0" max="180" data-change="commute" value="${S.commute || ''}" placeholder="0">`)}
     <div class="pad" style="padding-bottom:6px"><div class="muted" style="font-size:13px;margin-bottom:8px">Before-work checklist (comma separated)</div><input class="input" data-change="kit" value="${esc(S.kit || '')}" placeholder="Badge, Water bottle, Lunch"></div>
-    <div class="pad muted" style="font-size:13px;padding-top:4px">Pay is an estimate before taxes. Unpaid break is taken off shifts of 6 hours or more. Pick any one payday and Dash counts every two weeks from it.</div>
+    <div class="pad muted" style="font-size:13px;padding-top:4px">Pay weeks run Sunday to Saturday, with time and a half past 40 hours. Unpaid break comes off shifts of 6 hours or more. Pick any one payday and Dash counts every two weeks from it. Set “Taxes withheld” from a real pay stub to see take-home.</div>
   </div>
 
   <div class="settings-label">Bills</div>
@@ -1610,6 +1671,8 @@ const A = {
     const t = dkey(), v = el.dataset.v, cur = S.kitDone && S.kitDone.date === t ? S.kitDone.items : [];
     S.kitDone = { date: t, items: cur.includes(v) ? cur.filter(x => x !== v) : [...cur, v] }; save(); render();
   },
+  openPay: () => { payMonth = 0; paySheet(); },
+  payNav: el => { payMonth += +el.dataset.n; const y = $('.sheet')?.scrollTop || 0; paySheet(); const sh = $('.sheet'); if (sh) { sh.style.transition = 'none'; sh.scrollTop = y; requestAnimationFrame(() => sh.style.transition = ''); } },
   addBill: () => billSheet(),
   editBill: el => billSheet(byId('bills', el.dataset.id)),
   deleteBill: el => removeWithUndo('bills', el.dataset.id, 'Bill'),
@@ -1684,6 +1747,8 @@ const INPUTS = {
 };
 const CHANGES = {
   rate: el => { S.rate = Math.max(0, +el.value || 0); save(); },
+  job: el => { S.job = el.value.trim().slice(0, 30); save(); },
+  taxPct: el => { S.taxPct = Math.max(0, Math.min(60, +el.value || 0)); save(); },
   unpaidBreak: el => { S.unpaidBreak = Math.max(0, Math.min(120, +el.value || 0)); save(); },
   commute: el => { S.commute = Math.max(0, Math.min(180, +el.value || 0)); save(); },
   payday: el => { S.payday = el.value; save(); },

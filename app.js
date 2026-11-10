@@ -70,7 +70,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '', calUrl: '', stocks: 'SPY, AAPL, NVDA',
+  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', stocks: 'SPY, AAPL, NVDA',
   notes: [],
   links: [
     { id: uid(), title: 'Calendar', url: 'https://calendar.google.com', emoji: '📅' },
@@ -577,10 +577,12 @@ function parseICS(txt) {
 const calSrc = () => S.calUrl ? 'ics:' + S.calUrl : SY.vault ? 'sc:' + SY.vault : '';
 function parseShiftLines(txt) {
   return (txt || '').split(/\r?\n/).map(l => {
-    const [title, a, b] = l.split('|').map(x => x.trim()), start = Date.parse(a), end = Date.parse(b);
-    return isNaN(start) ? null : { title, start, end: isNaN(end) ? undefined : end, allDay: !isNaN(end) && end - start >= 864e5 - 6e4 };
+    const [title, a, b, cal] = l.split('|').map(x => x.trim()), start = Date.parse(a), end = Date.parse(b);
+    return isNaN(start) ? null : { title, start, end: isNaN(end) ? undefined : end, cal: cal || '', allDay: !isNaN(end) && end - start >= 864e5 - 6e4 };
   }).filter(Boolean).sort((x, y) => x.start - y.start);
 }
+const shiftCals = () => [...new Set((CAL.events || []).map(e => e.cal).filter(Boolean))];
+const runShortcut = () => { location.href = `shortcuts://run-shortcut?name=${encodeURIComponent('Dash Shifts')}&input=text&text=${encodeURIComponent(SY.vault)}`; };
 async function loadCal(force) {
   const src = calSrc(); if (!src || calBusy) return;
   if (!force && CAL.url === src && Date.now() - CAL.ts < (S.calUrl ? 30 : 5) * 60e3) return;
@@ -611,8 +613,12 @@ const dur = ms => { const h = ms / 36e5; return h >= 1 ? `${+h.toFixed(1)}h` : `
 function workCard() {
   const src = calSrc(), mine = CAL.url === src;
   if (!src || (!S.calUrl && !(mine && CAL.at))) return '';
-  const now = Date.now(), evs = (mine && CAL.events || []).filter(e => (e.end || e.start + 36e5) > now);
-  const head = secHead('💼 Work', evs.length ? `<span class="muted" style="font-size:13px;font-weight:600">${dur(evs.filter(e => e.start < now + 7 * 864e5 && !e.allDay).reduce((a, e) => a + ((e.end || e.start) - e.start), 0))} next 7 days</span>` : '');
+  const cals = S.calUrl ? [] : shiftCals();
+  if (cals.length > 1 && !cals.includes(S.workCal)) return `<section class="card" id="work">${secHead('💼 Work')}
+    <div class="muted" style="margin-bottom:10px">Which calendar has your shifts?</div>
+    <div class="chips">${cals.map(c => `<button class="chip" data-a="setWorkCal" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></section>`;
+  const now = Date.now(), evs = (mine && CAL.events || []).filter(e => (e.end || e.start + 36e5) > now && (!cals.includes(S.workCal) || e.cal === S.workCal));
+  const head = secHead('💼 Work', !S.calUrl ? `<button class="link-btn" data-a="updateShifts">Update</button>` : evs.length ? `<span class="muted" style="font-size:13px;font-weight:600">${dur(evs.filter(e => e.start < now + 7 * 864e5 && !e.allDay).reduce((a, e) => a + ((e.end || e.start) - e.start), 0))} next 7 days</span>` : '');
   if (!evs.length) return `<section class="card" id="work">${head}<div class="muted">${CAL.error && S.calUrl ? 'Couldn’t load your schedule from that link.' : mine ? `No shifts coming up 🎉${CAL.at && now - CAL.at > 3 * 864e5 ? ' (last update from your iPhone was ' + ago(CAL.at).toLowerCase() + ')' : ''}` : 'Loading your schedule…'}</div></section>`;
   const dayName = t => { const n = dayDiff(new Date(), new Date(t)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
   const range = e => e.allDay ? 'All day' : `${tm(e.start)} – ${tm(e.end || e.start)}`;
@@ -984,13 +990,13 @@ function viewSettings() {
 
   <div class="settings-label">Work schedule</div>
   <div class="list">
-    ${row('💼', 'Status', `<span class="v">${S.calUrl ? (CAL.error ? 'Link not working' : `${(CAL.events || []).length} upcoming`) : !SY.vault ? 'Needs cloud sync' : CAL.at ? `${(CAL.events || []).length} shifts · sent ${ago(CAL.at).toLowerCase()}` : 'Waiting for your iPhone'}</span>`)}
-    ${SY.vault ? `
-      ${row('📱', 'Set up iPhone Shortcut', `<span class="v">${I.chev}</span>`, 'shortcutHelp')}
-      ${row('🔄', 'Check for shifts now', `<span class="v">${I.chev}</span>`, 'checkShifts')}`
-    : `<div class="pad muted" style="font-size:14px">Turn on cloud sync above first. Then an iPhone Shortcut can send your shifts here from the Calendar app.</div>`}
+    ${row('💼', 'Status', `<span class="v">${S.calUrl ? (CAL.error ? 'Link not working' : `${(CAL.events || []).length} upcoming`) : !SY.vault ? 'Not set up yet' : CAL.at ? `${(CAL.events || []).length} shifts · sent ${ago(CAL.at).toLowerCase()}` : 'Waiting for your iPhone'}</span>`)}
+    <a class="row" href="Dash%20Shifts.shortcut" target="_blank" rel="noopener"><span class="ic">1️⃣</span><span class="row-title">Add the shortcut</span><span class="v">One time${I.chev}</span></a>
+    ${row('2️⃣', 'Update shifts', `<span class="v">${I.chev}</span>`, 'updateShifts')}
+    ${!S.calUrl && shiftCals().length > 1 ? `<div class="pad"><div class="muted" style="font-size:13px;margin-bottom:8px">Calendar with your shifts</div><div class="chips">${shiftCals().map(c => `<button class="chip ${S.workCal === c ? 'on' : ''}" data-a="setWorkCal" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></div>` : ''}
+    <div class="pad muted" style="font-size:13px">Tap 1 on your iPhone, then <b>Add Shortcut</b>. After that, tap 2 whenever you want fresh shifts. The first run asks to allow Calendar access.</div>
     <div class="pad" style="padding-bottom:8px"><input class="input" data-change="calUrl" value="${esc(S.calUrl || '')}" placeholder="Or paste a public calendar link" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
-    <div class="pad muted" style="font-size:13px;padding-top:0">Links work for normal calendar feeds (school, Google, iCloud). Apple’s employee schedule blocks them, so use the Shortcut for that.</div>
+    <div class="pad muted" style="font-size:13px;padding-top:0">Only for normal calendar feeds (school, Google, iCloud). Leave empty to use the shortcut.</div>
   </div>
 
   <div class="settings-label">Weather</div>
@@ -1342,33 +1348,13 @@ const A = {
   },
   importData: () => $('#import-file').click(),
   enableSync: () => enableSync(),
-  checkShifts: () => { if (S.calUrl) return toast('Remove the calendar link first'); loadCal(true).then(() => S.tab === 'settings' && render()); },
   copyVal: async el => { try { await navigator.clipboard.writeText(el.dataset.v); toast('Copied'); } catch { prompt('Copy this:', el.dataset.v); } },
-  shortcutHelp: () => {
-    const copy = (label, v) => `<button class="copy-row" data-a="copyVal" data-v="${esc(v)}"><small>${label}</small><code>${esc(v.length > 46 ? v.slice(0, 43) + '…' : v)}</code><span>Copy</span></button>`;
-    const step = (n, html) => `<div class="step"><b>${n}</b><div>${html}</div></div>`;
-    openSheet(`
-      <div class="sheet-title">Send shifts from your iPhone</div>
-      <p class="muted" style="margin-bottom:14px">Build this once in the <b>Shortcuts</b> app. It reads your work calendar and sends the next two weeks here.</p>
-      ${step(1, 'New Shortcut → add <b>Find Calendar Events</b>. Add filters: <b>Calendar is</b> your work calendar, and <b>Start Date is in the next 14 days</b>.')}
-      ${step(2, 'Add <b>Repeat with Each</b> (it uses the events). Inside it add a <b>Text</b> action with exactly:<br><code>Title|Start Date|End Date</code><br>Insert each as a variable from <b>Repeat Item</b>. Tap the Start Date and End Date variables and set <b>Date Format: ISO 8601</b> with <b>Include ISO 8601 Time</b> on.')}
-      ${step(3, 'After End Repeat add <b>Combine Text</b> (Repeat Results, with <b>New Lines</b>).')}
-      ${step(4, 'Add <b>Get Contents of URL</b> with this URL:')}
-      ${copy('URL', SB_URL + '/rest/v1/rpc/dash_set_shifts')}
-      ${step(5, 'Tap the arrow on that action: <b>Method POST</b>. Under <b>Headers</b> add <code>apikey</code> with this value:')}
-      ${copy('apikey', SB_KEY)}
-      ${step(6, '<b>Request Body: JSON</b>. Add two <b>Text</b> fields: <code>vault</code> with the value below, and <code>lines</code> set to the <b>Combined Text</b> variable.')}
-      ${copy('vault', SY.vault)}
-      ${step(7, 'Run it once, then tap <b>Check for shifts now</b> here. To keep it fresh: Shortcuts → Automation → <b>Time of Day</b>, daily, Run Immediately → this shortcut.')}
-      <div class="btn-row"><button class="btn" data-a="closeSheet">Done</button></div>`);
+  updateShifts: async () => {
+    if (S.calUrl) return loadCal(true);
+    if (!SY.vault) { await enableSync(); if (!SY.vault || syncStatus !== 'ok') return toast('Couldn’t turn on sync — try again'); }
+    CAL.ts = 0; runShortcut();
   },
-  syncNow: () => { SY.rev = -1; syncNow(); },
-  shareCode: async () => {
-    const text = SY.vault;
-    if (navigator.share) { try { await navigator.share({ title: 'Dash sync code', text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
-    try { await navigator.clipboard.writeText(text); toast('Sync code copied — paste it in Dash on your other device'); }
-    catch { prompt('Copy this sync code:', text); }
-  },
+  setWorkCal: el => { S.workCal = el.dataset.v; save(); render(); },
   disableSync: () => {
     if (!confirm('Stop syncing on this device? Your data stays here and in the cloud.')) return;
     SY = {}; saveSY(); syncStatus = 'off'; render(); toast('Sync turned off here');
@@ -1467,6 +1453,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
   if (S.focus.running && focusLeft() <= 0) focusComplete();
   if (!$('#sheet-root').innerHTML && !document.activeElement?.matches('input, textarea')) render();
+  if (!S.calUrl && SY.vault) { CAL.ts = 0; loadCal().then(() => S.tab === 'settings' && softRender()); }
   loadWeather(); syncNow();
 });
 addEventListener('online', syncNow);

@@ -48,6 +48,7 @@ const KEY = 'dash.v1';
 const ACCENTS = { violet: '#7c6cff', blue: '#3d8bff', teal: '#14b8a6', green: '#22c55e', orange: '#ff8a3d', pink: '#f43f8e', red: '#ef4444', gold: '#eab308' };
 const HABIT_EMOJI = ['💧', '🏃', '📚', '🧘', '💪', '🥗', '😴', '✍️', '🎸', '💊', '🚶', '🧠', '🌱', '☀️', '🦷', '📵'];
 const LINK_EMOJI = ['🔗', '🐙', '📺', '📧', '📅', '🎵', '💬', '🛒', '📰', '🏀', '💼', '🤖', '📷', '🎮', '🗺️', '💳'];
+const MOODS = [['😣', 'Rough'], ['😕', 'Meh'], ['😐', 'Okay'], ['🙂', 'Good'], ['😄', 'Great']];
 const CD_EMOJI = ['🎉', '✈️', '🎂', '🏖️', '🎓', '🎄', '💍', '🏆', '🎟️', '📦', '🏀', '❤️'];
 
 const DEFAULTS = () => ({
@@ -69,6 +70,7 @@ const DEFAULTS = () => ({
   water: { date: dkey(), count: 0 }, waterGoal: 8,
   intention: { date: dkey(), text: '' },
   focus: { mode: 'focus', running: false, endsAt: 0, remaining: 25 * 60, focusMin: 25, breakMin: 5, sessions: {} },
+  moods: {},
   tab: 'home', taskFilter: 'today', hideInstall: false,
 });
 
@@ -80,12 +82,136 @@ function load() {
   return DEFAULTS();
 }
 let S = load();
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { toast('Storage full — export a backup'); } };
+const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { toast('Storage full — export a backup'); } };
+const save = () => { persist(); markDirty(); };
+// Remember deletions so a sync merge doesn't resurrect them (kept 60 days).
+function tombstone(id) {
+  S._deleted = S._deleted || {};
+  S._deleted[id] = Date.now();
+  const cutoff = Date.now() - 60 * 864e5;
+  for (const k in S._deleted) if (S._deleted[k] < cutoff) delete S._deleted[k];
+}
 
 function rollDay() {
   const t = dkey();
   if (S.water.date !== t) S.water = { date: t, count: 0 };
   if (S.intention.date !== t) S.intention = { date: t, text: '' };
+}
+
+/* =========================================================
+   CLOUD SYNC (Supabase). No accounts: a long random sync code
+   identifies your vault; the DB only exposes two RPCs that need it.
+   ========================================================= */
+const SB_URL = 'https://cwlpoykayfrpohfvzrfm.supabase.co';
+const SB_KEY = 'sb_publishable_HNY1baadiiTnSl7CLRFxyg_i_RmTiYB'; // public by design
+const LOCAL_ONLY = ['tab', 'taskFilter', 'hideInstall'];
+let SY = (() => { try { return JSON.parse(localStorage.getItem('dash.sync')) || {}; } catch { return {}; } })();
+const saveSY = () => { try { localStorage.setItem('dash.sync', JSON.stringify(SY)); } catch { } };
+let syncStatus = SY.vault ? 'ok' : 'off', pushTimer = null, syncBusy = false, syncAgain = false;
+
+async function rpc(fn, body) {
+  const r = await fetch(`${SB_URL}/rest/v1/rpc/${fn}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY }, body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${fn} ${r.status}`);
+  return r.json();
+}
+const newVault = () => 'dash-' + [...crypto.getRandomValues(new Uint8Array(24))].map(b => b.toString(16).padStart(2, '0')).join('');
+function payload() { const o = { ...S }; LOCAL_ONLY.forEach(k => delete o[k]); return o; }
+function adopt(data) {
+  const keep = {}; LOCAL_ONLY.forEach(k => keep[k] = S[k]);
+  const d = DEFAULTS(); S = { ...d, ...data, ...keep, focus: { ...d.focus, ...data.focus } };
+  persist();
+}
+// Merge for when both sides changed: union lists by id, local edits win, deletions stick.
+function merge(local, remote) {
+  const dead = { ...(remote._deleted || {}), ...(local._deleted || {}) };
+  const out = { ...remote, ...local, _deleted: dead };
+  for (const k of ['tasks', 'habits', 'notes', 'links', 'countdowns']) {
+    const rmap = new Map((remote[k] || []).map(x => [x.id, x])), seen = new Set(), list = [];
+    for (const x of local[k] || []) {
+      const r = rmap.get(x.id); seen.add(x.id);
+      if (k === 'habits' && r) list.push({ ...x, log: { ...r.log, ...x.log } });
+      else if (k === 'notes' && r && (r.updated || 0) > (x.updated || 0)) list.push(r);
+      else list.push(x);
+    }
+    for (const r of remote[k] || []) if (!seen.has(r.id)) list.push(r);
+    out[k] = list.filter(x => !dead[x.id]);
+  }
+  out.moods = { ...(remote.moods || {}), ...(local.moods || {}) };
+  const ss = { ...(remote.focus?.sessions || {}) };
+  for (const [k, v] of Object.entries(local.focus?.sessions || {})) ss[k] = Math.max(v, ss[k] || 0);
+  out.focus = { ...local.focus, sessions: ss };
+  return out;
+}
+function markDirty() {
+  if (!SY.vault) return;
+  SY.dirty = true; saveSY();
+  clearTimeout(pushTimer); pushTimer = setTimeout(syncNow, 1500);
+}
+function setSyncStatus(s) {
+  syncStatus = s;
+  $$('[data-sync-dot]').forEach(el => el.dataset.syncDot = s);
+  const t = $('#sync-text'); if (t) t.textContent = syncLabel();
+}
+function syncLabel() {
+  if (!SY.vault) return 'Off';
+  if (syncStatus === 'syncing') return 'Syncing…';
+  if (syncStatus === 'error') return 'Couldn’t sync — will retry';
+  if (syncStatus === 'offline') return 'Offline — will sync later';
+  return SY.last ? `Synced ${ago(SY.last).toLowerCase()}` : 'Ready';
+}
+async function syncNow() {
+  if (!SY.vault) return;
+  if (!navigator.onLine) return setSyncStatus('offline');
+  if (syncBusy) { syncAgain = true; return; }
+  // Don't swap data out from under an open editor; try again shortly.
+  if ($('#sheet-root').innerHTML && !SY.dirty) { clearTimeout(pushTimer); pushTimer = setTimeout(syncNow, 4000); return; }
+  syncBusy = true; setSyncStatus('syncing');
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const [remote] = await rpc('dash_pull', { vault: SY.vault });
+      let changed = false;
+      if (remote && remote.rev !== SY.rev) {
+        if (SY.dirty) S = { ...merge(payload(), remote.data), ...Object.fromEntries(LOCAL_ONLY.map(k => [k, S[k]])) };
+        else adopt(remote.data);
+        SY.rev = remote.rev; persist(); changed = true;
+      }
+      if (SY.dirty || !remote) {
+        const [res] = await rpc('dash_push', { vault: SY.vault, payload: payload(), base_rev: remote ? remote.rev : 0 });
+        if (!res.ok) continue; // someone else wrote in between → pull, merge, retry
+        SY.rev = res.rev; SY.dirty = false;
+      }
+      SY.last = Date.now(); saveSY();
+      if (changed) softRender();
+      setSyncStatus('ok');
+      break;
+    }
+  } catch { setSyncStatus('error'); }
+  syncBusy = false;
+  if (syncAgain) { syncAgain = false; syncNow(); }
+}
+// Re-render unless the user is typing in the page.
+function softRender() {
+  applyTheme();
+  if ($('#sheet-root').innerHTML || document.activeElement?.closest?.('#view input, #view textarea')) return;
+  render();
+}
+async function enableSync() {
+  SY = { vault: newVault(), rev: 0, dirty: true }; saveSY();
+  await syncNow();
+  render(); if (syncStatus === 'ok') toast('Cloud sync is on ☁️');
+}
+async function joinSync(code) {
+  code = code.trim();
+  if (!/^dash-[0-9a-f]{48}$/.test(code)) return toast('That doesn’t look like a sync code');
+  try {
+    const [remote] = await rpc('dash_pull', { vault: code });
+    if (!remote) return toast('No dashboard found for that code');
+    if (!confirm('Replace what’s on this device with your synced dashboard?')) return;
+    SY = { vault: code, rev: remote.rev, dirty: false, last: Date.now() }; saveSY();
+    adopt(remote.data); setSyncStatus('ok'); render(true); toast('Synced ☁️');
+  } catch { toast('Couldn’t reach the sync server'); }
 }
 
 /* ---------- theme ---------- */
@@ -132,14 +258,49 @@ function todayTasks() {
 }
 function taskRow(t) {
   const d = dueLabel(t.due);
-  const meta = (d && !t.done) || t.priority ? `<div class="task-meta">${d && !t.done ? `<span class="due ${d.c}">${d.t}</span>` : ''}${t.priority ? `<span class="prio">${'!'.repeat(t.priority)}</span>` : ''}</div>` : '';
-  return `<div class="task ${t.done ? 'done' : ''} p${t.priority || 0}" data-tid="${t.id}">
-    <button class="check" data-a="toggleTask" data-id="${t.id}" aria-label="${t.done ? 'Mark incomplete' : 'Complete'}">${I.check}</button>
-    <div class="task-body" data-a="editTask" data-id="${t.id}"><div class="task-text">${esc(t.text)}</div>${meta}</div>
+  const bits = [
+    d && !t.done ? `<span class="due ${d.c}">${d.t}</span>` : '',
+    t.repeat && !t.done ? `<span class="rep">🔁 ${REPEATS[t.repeat]}</span>` : '',
+    t.priority ? `<span class="prio">${'!'.repeat(t.priority)}</span>` : '',
+  ].join('');
+  return `<div class="swipe" data-tid="${t.id}">
+    <div class="swipe-bg"><span class="l">${I.check} ${t.done ? 'Undo' : 'Done'}</span><span class="r">Delete ${I.trash}</span></div>
+    <div class="task ${t.done ? 'done' : ''} p${t.priority || 0}">
+      <button class="check" data-a="toggleTask" data-id="${t.id}" aria-label="${t.done ? 'Mark incomplete' : 'Complete'}">${I.check}</button>
+      <div class="task-body" data-a="editTask" data-id="${t.id}"><div class="task-text">${esc(t.text)}</div>${bits ? `<div class="task-meta">${bits}</div>` : ''}</div>
+    </div>
   </div>`;
 }
+const REPEATS = { daily: 'Daily', weekdays: 'Weekdays', weekly: 'Weekly', monthly: 'Monthly' };
+function nextDue(t) {
+  const base = parseKey(t.due || dkey()), today = parseKey(dkey()), day = base.getDate();
+  let d = base;
+  const step = () => {
+    if (t.repeat === 'daily') d = addDays(d, 1);
+    else if (t.repeat === 'weekly') d = addDays(d, 7);
+    else if (t.repeat === 'weekdays') { do d = addDays(d, 1); while (d.getDay() === 0 || d.getDay() === 6); }
+    else { const m = new Date(d.getFullYear(), d.getMonth() + 1, 1); m.setDate(Math.min(day, new Date(m.getFullYear(), m.getMonth() + 1, 0).getDate())); d = m; }
+  };
+  step(); while (d <= today) step();
+  return dkey(d);
+}
+function setTaskDone(id, done) {
+  const t = S.tasks.find(x => x.id === id); if (!t) return null;
+  t.done = done; t.doneAt = done ? dkey() : null; t.doneTs = done ? Date.now() : null;
+  let msg = null;
+  if (done && t.repeat) {
+    const next = { ...t, id: uid(), done: false, doneAt: null, doneTs: null, due: nextDue(t), created: Date.now() };
+    S.tasks.push(next); t.spawned = next.id; msg = `Next: ${dueLabel(next.due).t}`;
+  } else if (!done && t.spawned) {
+    const sp = S.tasks.find(x => x.id === t.spawned && !x.done);
+    if (sp) { S.tasks = S.tasks.filter(x => x !== sp); tombstone(sp.id); }
+    t.spawned = null;
+  }
+  save();
+  return msg;
+}
 function parseQuick(text) {
-  let due = '', priority = 0;
+  let due = '', priority = 0, repeat = '';
   const words = text.trim().split(/\s+/), keep = [];
   for (const w of words) {
     const l = w.toLowerCase();
@@ -147,14 +308,16 @@ function parseQuick(text) {
     else if (l === '!') priority = Math.max(priority, 1);
     else if (l === 'today' || l === 'tod') due = dkey();
     else if (l === 'tomorrow' || l === 'tmr' || l === 'tmrw') due = dkey(addDays(new Date(), 1));
+    else if (REPEATS[l]) repeat = l;
     else keep.push(w);
   }
-  return { text: keep.join(' ') || text.trim(), due, priority };
+  if (repeat && !due) due = dkey();
+  return { text: keep.join(' ') || text.trim(), due, priority, repeat };
 }
 function addTask(raw, defaultDue = '') {
   const p = parseQuick(raw);
   if (!p.text) return;
-  S.tasks.push({ id: uid(), text: p.text, done: false, due: p.due || defaultDue, priority: p.priority, created: Date.now() });
+  S.tasks.push({ id: uid(), text: p.text, done: false, due: p.due || defaultDue, priority: p.priority, repeat: p.repeat, created: Date.now() });
   save();
 }
 
@@ -347,6 +510,47 @@ function tick() {
 }
 setInterval(tick, 1000);
 
+function toggleTask(id) {
+  const t = byId('tasks', id); if (!t) return;
+  const done = !t.done, msg = setTaskDone(id, done);
+  $(`.swipe[data-tid="${id}"] .task`)?.classList.toggle('done', done);
+  if (done) navigator.vibrate?.(10);
+  if (msg) toast(msg);
+  setTimeout(() => render(), done ? 450 : 0);
+}
+
+/* ---------- swipe rows: right = complete, left = delete ---------- */
+let sw = null, swipeEndedAt = 0;
+document.addEventListener('touchstart', e => {
+  const row = e.target.closest('.swipe');
+  sw = row && !e.target.closest('.check') ? { row, x: e.touches[0].clientX, y: e.touches[0].clientY, dx: 0, lock: null } : null;
+}, { passive: true });
+document.addEventListener('touchmove', e => {
+  if (!sw) return;
+  const dx = e.touches[0].clientX - sw.x, dy = e.touches[0].clientY - sw.y;
+  if (!sw.lock) {
+    if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+    sw.lock = Math.abs(dx) > Math.abs(dy) * 1.2 ? 'x' : 'y';
+    if (sw.lock === 'x') sw.row.classList.add('swiping');
+  }
+  if (sw.lock !== 'x') return;
+  e.preventDefault();
+  sw.dx = dx;
+  sw.row.querySelector('.task').style.transform = `translateX(${dx}px)`;
+  sw.row.classList.toggle('right', dx > 0);
+  const armed = Math.abs(dx) > 90;
+  if (armed !== sw.row.classList.contains('armed')) { sw.row.classList.toggle('armed', armed); if (armed) navigator.vibrate?.(8); }
+}, { passive: false });
+document.addEventListener('touchend', () => {
+  if (!sw || sw.lock !== 'x') { sw = null; return; }
+  const { row, dx } = sw, id = row.dataset.tid, task = row.querySelector('.task');
+  sw = null; swipeEndedAt = Date.now();
+  task.style.transition = 'transform .25s cubic-bezier(.2,.8,.2,1)';
+  if (dx > 90) { task.style.transform = ''; setTimeout(() => { row.classList.remove('swiping', 'armed', 'right'); toggleTask(id); }, 150); }
+  else if (dx < -90) { task.style.transform = 'translateX(-110%)'; setTimeout(() => removeWithUndo('tasks', id, 'Task'), 220); }
+  else { task.style.transform = ''; setTimeout(() => row.classList.remove('swiping', 'armed', 'right'), 250); }
+});
+
 /* =========================================================
    VIEWS
    ========================================================= */
@@ -370,7 +574,7 @@ function viewHome() {
       <div class="eyebrow">${now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</div>
       <h1>${greet}${S.name ? `,<br><span class="accent">${esc(S.name)}</span>` : ''}</h1>
     </div>
-    <button class="icon-btn" data-a="goSettings" aria-label="Settings">${I.gear}</button>
+    <button class="icon-btn" data-a="goSettings" aria-label="Settings">${I.gear}${SY.vault ? `<span class="sync-dot" data-sync-dot="${syncStatus}"></span>` : ''}</button>
   </header>
 
   ${!S.hideInstall && !isStandalone() ? `<div class="banner"><span style="font-size:24px">📲</span><div><b>Add to Home Screen</b>${isIOS() ? 'Tap Share, then “Add to Home Screen”.' : 'Use your browser menu → Install app.'}</div><button class="x" data-a="hideInstall" aria-label="Dismiss">${I.x}</button></div>` : ''}
@@ -388,6 +592,8 @@ function viewHome() {
     </div>
     <label class="intention"><span>🎯</span><input data-input="intention" value="${esc(S.intention.text)}" placeholder="Today’s one big thing…" enterkeyhint="done"></label>
   </section>
+
+  ${moodCard()}
 
   <section class="card">
     ${secHead('Up next', `<button class="link-btn" data-a="tab" data-tab="tasks">See all</button>`)}
@@ -440,6 +646,18 @@ function viewHome() {
   </section>`;
 }
 
+function moodCard() {
+  const t = dkey(), cur = S.moods[t];
+  const days = Array.from({ length: 14 }, (_, i) => dkey(addDays(new Date(), i - 13)));
+  const logged = days.filter(k => S.moods[k]);
+  const avg = logged.length ? logged.reduce((a, k) => a + S.moods[k], 0) / logged.length : 0;
+  return `<section class="card">
+    ${secHead(cur ? `Feeling ${MOODS[cur - 1][1].toLowerCase()} today` : 'How are you feeling?', logged.length > 2 ? `<span class="muted" style="font-size:13px;font-weight:600">2-wk avg ${MOODS[Math.round(avg) - 1][0]}</span>` : '')}
+    <div class="moods ${cur ? 'has' : ''}">${MOODS.map(([e, l], i) => `<button class="mood ${cur === i + 1 ? 'on' : ''}" data-a="setMood" data-v="${i + 1}" aria-label="${l}">${e}</button>`).join('')}</div>
+    ${logged.length ? `<div class="mood-strip">${days.map(k => `<span class="${k === t ? 't' : ''}" title="${k}">${S.moods[k] ? MOODS[S.moods[k] - 1][0] : ''}</span>`).join('')}</div>` : ''}
+  </section>`;
+}
+
 function viewTasks() {
   const t = dkey(), f = S.taskFilter;
   const open = S.tasks.filter(x => !x.done).sort(taskSort);
@@ -466,7 +684,7 @@ function viewTasks() {
   return `
   <header class="page-head"><h1>Tasks</h1>${open.length ? `<span class="count-pill">${open.length}</span>` : ''}</header>
   <form class="quick-add" data-form="quickTask" autocomplete="off">
-    <input class="input" id="qt" name="text" placeholder="Add a task… try “call mom tmr !”" enterkeyhint="done">
+    <input class="input" id="qt" name="text" placeholder="Add a task… try “gym daily !”" enterkeyhint="done">
     <button class="add-btn" aria-label="Add task">${I.plus}</button>
   </form>
   <div class="seg">${[['today', 'Today'], ['upcoming', 'Upcoming'], ['all', 'All'], ['done', 'Done']].map(([k, l]) => `<button class="${f === k ? 'on' : ''}" data-a="taskFilter" data-f="${k}">${l}</button>`).join('')}</div>
@@ -526,6 +744,22 @@ function viewSettings() {
   const row = (ic, title, right, a = '', attrs = '') => `<${a ? 'button' : 'div'} class="row" ${a ? `data-a="${a}"` : ''} ${attrs}><span class="ic">${ic}</span><span class="row-title">${title}</span>${right}</${a ? 'button' : 'div'}>`;
   return `
   <header class="page-head"><button class="icon-btn" data-a="tab" data-tab="home" aria-label="Back" style="transform:scaleX(-1)">${I.chev}</button><h1>Settings</h1></header>
+
+  <div class="settings-label">Cloud sync</div>
+  <div class="list">
+    ${SY.vault ? `
+      ${row('☁️', 'Status', `<span class="v"><span class="sync-dot inline" data-sync-dot="${syncStatus}"></span><span id="sync-text">${syncLabel()}</span></span>`)}
+      ${row('🔄', 'Sync now', `<span class="v">${I.chev}</span>`, 'syncNow')}
+      ${row('📲', 'Add another device', `<span class="v">Share code${I.chev}</span>`, 'shareCode')}
+      ${row('🔌', '<span style="color:var(--danger)">Turn off on this device</span>', '', 'disableSync')}`
+    : `
+      <div class="pad muted" style="font-size:14px">Back up everything and keep your phone, laptop and iPad in sync. No account needed — you get a private sync code.</div>
+      <div class="pad" style="padding-top:0"><button class="btn" data-a="enableSync">Turn on cloud sync</button></div>
+      <form class="pad quick-add" data-form="joinSync" style="padding-top:0" autocomplete="off">
+        <input class="input" name="code" placeholder="Have a code? Paste it here" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <button class="add-btn" aria-label="Join">${I.chev}</button>
+      </form>`}
+  </div>
 
   <div class="settings-label">Profile</div>
   <div class="list">${row('👋', 'Your name', `<input class="inline" data-change="name" value="${esc(S.name)}" placeholder="Optional" autocomplete="given-name">`)}</div>
@@ -646,8 +880,8 @@ function toast(msg, undo) {
 }
 function removeWithUndo(listName, id, label) {
   const list = S[listName], i = list.findIndex(x => x.id === id); if (i < 0) return;
-  const [item] = list.splice(i, 1); save(); closeSheet(); render();
-  toast(`${label} deleted`, () => { S[listName].splice(i, 0, item); save(); render(); });
+  const [item] = list.splice(i, 1); tombstone(id); save(); closeSheet(); render();
+  toast(`${label} deleted`, () => { delete S._deleted[id]; S[listName].splice(i, 0, item); save(); render(); });
 }
 
 /* ---------- sheet forms ---------- */
@@ -670,6 +904,11 @@ function taskSheet(t) {
       ${[[0, 'None'], [1, '! Medium'], [2, '!! High']].map(([v, l]) => `<button type="button" class="chip ${(t.priority || 0) === v ? 'on' : ''}" data-a="pickChip" data-v="${v}">${l}</button>`).join('')}
     </div>
     <input type="hidden" name="priority" value="${t.priority || 0}">
+    <label class="label">Repeat</label>
+    <div class="chips" data-group="repeat">
+      ${[['', 'Never'], ...Object.entries(REPEATS)].map(([v, l]) => `<button type="button" class="chip ${(t.repeat || '') === v ? 'on' : ''}" data-a="pickChip" data-v="${v}">${l}</button>`).join('')}
+    </div>
+    <input type="hidden" name="repeat" value="${t.repeat || ''}">
     <div class="btn-row">
       <button class="btn">${isNew ? 'Add task' : 'Save'}</button>
       ${isNew ? '' : `<button type="button" class="btn danger" data-a="deleteTask" data-id="${t.id}">Delete task</button>`}
@@ -762,7 +1001,7 @@ function noteSheet(id) {
     },
     onClose: () => {
       if (deleted) return;
-      if (!isNew && !n.title.trim() && !n.body.trim()) S.notes = S.notes.filter(x => x.id !== n.id);
+      if (!isNew && !n.title.trim() && !n.body.trim()) { S.notes = S.notes.filter(x => x.id !== n.id); tombstone(n.id); }
       save(); if (S.tab === 'notes') setTimeout(() => render(), 0);
     },
   });
@@ -793,20 +1032,20 @@ const A = {
   undo: () => { undoFn?.(); undoFn = null; $('#toast').classList.remove('show'); },
   quickAdd: quickAddSheet,
   hideInstall: () => { S.hideInstall = true; save(); render(); },
-
-  toggleTask: el => {
-    const t = byId('tasks', el.dataset.id); if (!t) return;
-    t.done = !t.done; t.doneAt = t.done ? dkey() : null; t.doneTs = t.done ? Date.now() : null; save();
-    const row = el.closest('.task'); row?.classList.toggle('done', t.done);
-    if (t.done) navigator.vibrate?.(10);
-    setTimeout(() => render(), t.done ? 450 : 0);
+  setMood: el => {
+    const t = dkey(), v = +el.dataset.v;
+    if (S.moods[t] === v) delete S.moods[t]; else { S.moods[t] = v; navigator.vibrate?.(10); }
+    save(); render();
   },
+
+  toggleTask: el => toggleTask(el.dataset.id),
   editTask: el => taskSheet(byId('tasks', el.dataset.id)),
   deleteTask: el => removeWithUndo('tasks', el.dataset.id, 'Task'),
   taskFilter: el => { S.taskFilter = el.dataset.f; save(); render(); },
   clearDone: () => {
-    const before = S.tasks; S.tasks = S.tasks.filter(x => !x.done); save(); render();
-    toast('Cleared completed', () => { S.tasks = before; save(); render(); });
+    const before = S.tasks, gone = S.tasks.filter(x => x.done);
+    gone.forEach(x => tombstone(x.id)); S.tasks = S.tasks.filter(x => !x.done); save(); render();
+    toast('Cleared completed', () => { gone.forEach(x => delete S._deleted[x.id]); S.tasks = before; save(); render(); });
   },
 
   toggleHabit: el => {
@@ -867,6 +1106,18 @@ const A = {
     toast('Backup exported');
   },
   importData: () => $('#import-file').click(),
+  enableSync: () => enableSync(),
+  syncNow: () => { SY.rev = -1; syncNow(); },
+  shareCode: async () => {
+    const text = SY.vault;
+    if (navigator.share) { try { await navigator.share({ title: 'Dash sync code', text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+    try { await navigator.clipboard.writeText(text); toast('Sync code copied — paste it in Dash on your other device'); }
+    catch { prompt('Copy this sync code:', text); }
+  },
+  disableSync: () => {
+    if (!confirm('Stop syncing on this device? Your data stays here and in the cloud.')) return;
+    SY = {}; saveSY(); syncStatus = 'off'; render(); toast('Sync turned off here');
+  },
   resetAll: () => {
     if (!confirm('Erase all tasks, habits, notes and settings on this device? This can’t be undone.')) return;
     localStorage.removeItem(KEY); localStorage.removeItem('dash.weather'); S = DEFAULTS(); W = {}; save(); applyTheme(); render(true); toast('Fresh start');
@@ -874,13 +1125,15 @@ const A = {
 };
 
 const FORMS = {
+  joinSync: f => joinSync(f.elements.code.value),
   quickTask: f => { addTask(f.elements.text.value, S.taskFilter === 'today' ? dkey() : ''); render(); $('#qt')?.focus(); },
   quick: f => { const v = f.elements.text.value; if (!v.trim()) return; addTask(v, dkey()); closeSheet(); render(); toast('Task added'); },
   task: f => {
     const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
     if (!d.text.trim()) return;
-    if (id) Object.assign(byId('tasks', id), { text: d.text.trim(), due: d.due, priority: +d.priority });
-    else S.tasks.push({ id: uid(), text: d.text.trim(), done: false, due: d.due, priority: +d.priority, created: Date.now() });
+    const due = d.repeat && !d.due ? dkey() : d.due;
+    if (id) Object.assign(byId('tasks', id), { text: d.text.trim(), due, priority: +d.priority, repeat: d.repeat });
+    else S.tasks.push({ id: uid(), text: d.text.trim(), done: false, due, priority: +d.priority, repeat: d.repeat, created: Date.now() });
     save(); closeSheet(); render();
   },
   habit: f => {
@@ -922,6 +1175,7 @@ const CHANGES = {
 
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-a]'); if (!el) return;
+  if (Date.now() - swipeEndedAt < 350 && el.closest('.swipe')) return;
   const fn = A[el.dataset.a]; if (!fn) return;
   if (el.tagName !== 'A') e.preventDefault();
   fn(el, e);
@@ -948,8 +1202,10 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
   if (S.focus.running && focusLeft() <= 0) focusComplete();
   if (!$('#sheet-root').innerHTML && !document.activeElement?.matches('input, textarea')) render();
-  loadWeather();
+  loadWeather(); syncNow();
 });
+addEventListener('online', syncNow);
+setInterval(() => document.visibilityState === 'visible' && syncNow(), 60e3);
 
 /* =========================================================
    BOOT
@@ -959,6 +1215,10 @@ if (S.focus.running && focusLeft() <= 0) focusComplete(true);
 applyTheme();
 render(true);
 loadWeather();
+syncNow();
+// Home-screen shortcuts: ?add=task / ?add=note
+const addParam = new URLSearchParams(location.search).get('add');
+if (addParam) { history.replaceState(null, '', location.pathname); setTimeout(() => addParam === 'note' ? noteSheet() : quickAddSheet(), 350); }
 setInterval(() => loadWeather(), 15 * 60e3);
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => { }));

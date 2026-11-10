@@ -142,7 +142,7 @@ function adopt(data) {
 function merge(local, remote) {
   const dead = { ...(remote._deleted || {}), ...(local._deleted || {}) };
   const out = { ...remote, ...local, _deleted: dead };
-  for (const k of ['tasks', 'habits', 'notes', 'links', 'countdowns', 'bills', 'xShifts', 'spend']) {
+  for (const k of ['tasks', 'habits', 'notes', 'links', 'countdowns', 'bills', 'xShifts', 'spend', 'places']) {
     const rmap = new Map((remote[k] || []).map(x => [x.id, x])), seen = new Set(), list = [];
     for (const x of local[k] || []) {
       const r = rmap.get(x.id); seen.add(x.id);
@@ -347,8 +347,9 @@ function buildReminders() {
     }
     // Work: time to leave, and a heads-up the evening before
     if (N.work) for (const e of sh) {
-      const lead = (S.commute || 0) + (+N.lead || 15);
-      add(e.start - lead * 6e4, S.commute ? `Leave by ${tm(e.start - S.commute * 6e4)}` : `Shift in ${+N.lead || 15} min`, `${tm(e.start)} – ${tm(e.end)}${e.loc ? ' · ' + e.loc : ''}`, 'leave-' + e.start);
+      const pl = fromPlace(), go = leaveAt(e.start, pl), others = allPlaces().filter(x => x.id !== pl.id && x.mins);
+      const body = [S.early ? `Be there ${tm(arriveAt(e.start))}` : '', `Shift ${tm(e.start)} – ${tm(e.end)}`, ...others.map(x => `From ${x.name}: ${tm(leaveAt(e.start, x))}`)].filter(Boolean).join(' · ');
+      add(go - (+N.lead || 15) * 6e4, pl.mins ? `Leave ${allPlaces().length > 1 ? pl.name + ' ' : ''}by ${tm(go)}` : `Shift in ${(+N.lead || 15) + (S.early || 0)} min`, body, 'leave-' + e.start);
       const early = new Date(e.start).getHours() < 12;
       add(atTime(dkey(addDays(parseKey(day), -1)), '20:00'), `Work tomorrow ${tm(e.start)} – ${tm(e.end)}`, early ? `Bed by ${tm(e.start - ((S.commute || 0) + 45) * 6e4 - 8 * 36e5)} for 8 hours of sleep` : 'Pack what you need tonight', 'eve-' + e.start);
     }
@@ -886,6 +887,55 @@ function hourlyAt(t) {
   const x = new Date(t), i = d.hourly.time.indexOf(`${dkey(x)}T${pad(x.getHours())}:00`);
   return i < 0 ? null : { temp: Math.round(d.hourly.temperature_2m[i]), rain: d.hourly.precipitation_probability[i], icon: wmo(d.hourly.weather_code[i], d.hourly.is_day[i]).icon };
 }
+/* ---------- places: where you might leave from, each with its own drive time ---------- */
+const allPlaces = () => [{ id: 'home', name: 'Home', icon: '🏠', mins: S.commute || 0, lat: S.homeLL?.lat, lon: S.homeLL?.lon }, ...(S.places || [])];
+const fromPlace = () => allPlaces().find(x => x.id === S.from) || allPlaces()[0];
+const arriveAt = start => start - (S.early || 0) * 6e4;
+const leaveAt = (start, pl = fromPlace()) => arriveAt(start) - (pl.mins || 0) * 6e4;
+const hasTravel = () => allPlaces().some(x => x.mins);
+const mapsUrl = () => S.workAddr ? `https://maps.apple.com/?daddr=${encodeURIComponent(S.workAddr)}&dirflg=d` : '';
+function kmBetween(a, b) {
+  const r = x => x * Math.PI / 180, dLat = r(b.lat - a.lat), dLon = r(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(h));
+}
+// If you've pinned any place, Dash works out which one you're at when a shift is coming up.
+let autoFromAt = 0;
+function autoFrom() {
+  const pinned = allPlaces().filter(x => x.lat != null); if (!pinned.length || !navigator.geolocation) return;
+  const now = Date.now(), next = shifts().find(e => !e.allDay && e.start > now && e.start - now < 10 * 36e5);
+  if (!next || now - autoFromAt < 5 * 6e4) return; autoFromAt = now;
+  navigator.geolocation.getCurrentPosition(pos => {
+    const me = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+    const near = pinned.map(x => [kmBetween(me, x), x]).sort((a, b) => a[0] - b[0])[0];
+    let id = null;
+    if (near[0] < 1.5) id = near[1].id; else if (fromPlace().lat != null) id = allPlaces().find(x => x.lat == null)?.id || null;
+    if (!id || id === fromPlace().id) return;
+    S.from = id; save(); if (!$('#sheet-root').innerHTML) render();
+    toast(`Leaving from ${fromPlace().name} · leave by ${tm(leaveAt(next.start))}`);
+  }, () => {}, { timeout: 10000, maximumAge: 12e4 });
+}
+function placeSheet(pl) {
+  const isNew = !pl; pl = pl || { name: '', icon: '📍', mins: '' };
+  const home = pl.id === 'home';
+  openSheet(`
+  <form data-form="place" data-id="${pl.id || ''}" autocomplete="off">
+    <div class="sheet-title">${isNew ? 'New place' : esc(pl.name)}</div>
+    ${home ? '' : `<input class="input lg" name="name" value="${esc(pl.name)}" placeholder="Hospital, school, gym…" required maxlength="24">`}
+    <label class="label">Drive to work (minutes)</label>
+    <input class="input" type="number" inputmode="numeric" name="mins" min="0" max="240" value="${pl.mins || ''}" placeholder="35" required>
+    ${home ? '' : `<label class="label">Icon</label>${emojiPicker(['📍', '🏥', '🏫', '🏋️', '👨‍👩‍👧', '❤️', '🏢', '☕'], pl.icon)}`}
+    <label class="switch-row">${pl.lat != null ? 'Pinned — tap to re-pin where I am now' : 'Pin where I am now'}<span class="toggle"><input type="checkbox" name="pin"><i></i></span></label>
+    <p class="muted" style="font-size:13px;margin:6px 0 0">Pin a place while you’re standing there and Dash will notice when you’re at it before a shift, and switch “leave by” for you.${pl.lat != null ? ' <button type="button" class="link-btn" data-a="unpinPlace" data-id="' + pl.id + '">Remove pin</button>' : ''}</p>
+    <div class="btn-row"><button class="btn">${isNew ? 'Add place' : 'Save'}</button>
+      ${isNew || home ? '' : `<button type="button" class="btn danger" data-a="deletePlace" data-id="${pl.id}">Delete place</button>`}</div>
+  </form>`);
+}
+function setPlaceLL(id, ll) {
+  if (id === 'home') { if (ll) S.homeLL = ll; else delete S.homeLL; }
+  else { const x = (S.places || []).find(y => y.id === id); if (x) { if (ll) Object.assign(x, ll); else { delete x.lat; delete x.lon; } } }
+}
+
 function workCard() {
   const src = calSrc(), mine = CAL.url === src, byHand = (S.xShifts || []).length > 0;
   if (!byHand && (!src || (!S.calUrl && !(mine && CAL.at)))) return '';
@@ -904,8 +954,9 @@ function workCard() {
   // Helpful times around the shift
   const tips = [];
   if (soon) {
-    const leave = n.start - (S.commute || 0) * 6e4;
-    if (S.commute) tips.push(`<span class="tip ${leave - now < 30 * 6e4 && leave > now ? 'hot' : ''}">🚗 Leave by <b>${tm(leave)}</b></span>`);
+    const pl = fromPlace(), leave = leaveAt(n.start), many = allPlaces().length > 1;
+    if (pl.mins) tips.push(`<span class="tip ${leave - now < 30 * 6e4 && leave > now ? 'hot' : ''}">🚗 Leave${many ? ' ' + esc(pl.name.toLowerCase() === 'home' ? 'home' : pl.name) : ''} by <b>${tm(leave)}</b>${leave > now && leave - now < 6 * 36e5 ? ` · in ${dur(leave - now)}` : leave <= now ? ' · go now' : ''}</span>`);
+    if (S.early && pl.mins) tips.push(`<span class="tip">🎯 There by <b>${tm(arriveAt(n.start))}</b> · ${pl.mins} min drive</span>`);
     const w = hourlyAt(n.start); if (w) tips.push(`<span class="tip">${w.icon} <b>${w.temp}°</b> going in${w.rain >= 30 ? ` · ${w.rain}% rain` : ''}</span>`);
   }
   if ((on || soon) && n.end) { const w = hourlyAt(n.end); if (w) tips.push(`<span class="tip">${w.icon} <b>${w.temp}°</b> heading home${w.rain >= 30 ? ` · ${w.rain}% rain` : ''}</span>`); }
@@ -925,6 +976,7 @@ function workCard() {
       ${on ? `<div class="progress" style="margin:12px 0 0"><i style="width:${Math.min(100, (now - n.start) / (n.end - n.start) * 100)}%"></i></div>` : ''}
     </div>
     ${tips.length ? `<div class="tips">${tips.join('')}</div>` : ''}
+    ${soon && (allPlaces().length > 1 || mapsUrl()) ? `<div class="from"><small>Leaving from</small><div class="chip-row" style="margin-top:6px">${allPlaces().map(x => `<button class="habit-chip ${x.id === fromPlace().id ? 'on' : ''}" data-a="setFrom" data-id="${x.id}">${x.icon} ${esc(x.name)}${x.mins ? ` · ${tm(leaveAt(n.start, x))}` : ''}</button>`).join('')}${mapsUrl() ? `<a class="habit-chip" href="${esc(mapsUrl())}" target="_blank" rel="noopener">🧭 Directions</a>` : ''}</div></div>` : ''}
     ${showKit ? `<div class="kit"><small>${done.length >= kit.length ? 'Ready to go ✓' : 'Before you go'}</small><div class="chip-row" style="margin-top:6px">${kit.map(k => `<button class="habit-chip ${done.includes(k) ? 'on' : ''}" data-a="kitToggle" data-v="${esc(k)}">${done.includes(k) ? '✓ ' : ''}${esc(k)}</button>`).join('')}</div></div>` : ''}
     ${rest.length ? `<div class="shift-list">${rest.slice(0, 6).map(e => `<div class="shift-row" ${e.manual ? `data-a="editShift" data-id="${e.id}" style="cursor:pointer"` : ''}><b>${dayName(e.start)}${e.manual ? ' ✎' : ''}</b><span>${range(e)}</span><span class="muted">${e.allDay || !e.end ? esc(e.title || '') : dur(e.end - e.start)}</span></div>`).join('')}</div>` : ''}
   </section>`;
@@ -1236,7 +1288,7 @@ function viewHome() {
 // One row at the top of home: the few things that matter right now.
 function brief() {
   const now = Date.now(), out = [], all = shifts(), sh = all.find(e => !e.allDay && (e.end || e.start) > now);
-  if (sh && dkey(new Date(sh.start)) === dkey()) out.push(['home', sh.start <= now ? `💼 On shift till ${tm(sh.end)}` : `💼 Work ${tm(sh.start)}${S.commute ? ` · leave ${tm(sh.start - S.commute * 6e4)}` : ''}`]);
+  if (sh && dkey(new Date(sh.start)) === dkey()) out.push(['home', sh.start <= now ? `💼 On shift till ${tm(sh.end)}` : `💼 Work ${tm(sh.start)}${fromPlace().mins ? ` · leave ${tm(leaveAt(sh.start))}` : ''}`]);
   else if (all.length) out.push(['home', '🏖️ No shift today']);
   const due = todayTasks().open.length; if (due) out.push(['tasks', `✅ ${due} task${due === 1 ? '' : 's'} due`]);
   if (S.habits.length) { const left = S.habits.filter(h => !hOk(h)).length; out.push(['habits', left ? `🔥 ${left} habit${left === 1 ? '' : 's'} left` : '🔥 Habits done']); }
@@ -1624,7 +1676,11 @@ function viewSettings() {
     ${row('🥪', 'Unpaid break (min)', `<input class="inline num" type="number" inputmode="numeric" min="0" max="120" data-change="unpaidBreak" value="${S.unpaidBreak || ''}" placeholder="0">`)}
     ${row('🏛️', 'Taxes withheld (%)', `<input class="inline num" type="number" inputmode="decimal" min="0" max="60" data-change="taxPct" value="${S.taxPct || ''}" placeholder="0">`)}
     ${row('📆', 'A payday', `<input class="inline" type="date" data-change="payday" value="${esc(S.payday || S.paydaySeen || '')}" style="width:auto">`)}
-    ${row('🚗', 'Commute (min)', `<input class="inline num" type="number" inputmode="numeric" min="0" max="180" data-change="commute" value="${S.commute || ''}" placeholder="0">`)}
+    ${row('🎯', 'Arrive early (min)', `<input class="inline num" type="number" inputmode="numeric" min="0" max="60" data-change="early" value="${S.early || ''}" placeholder="0">`)}
+    ${row('🧭', 'Work address', `<input class="inline" data-change="workAddr" value="${esc(S.workAddr || '')}" placeholder="For directions" maxlength="80" style="width:170px">`)}
+    <div class="pad muted" style="font-size:13px;padding:10px 16px 2px">Places you leave from</div>
+    ${allPlaces().map(x => row(x.icon, esc(x.name) + (x.lat != null ? ' <span class="muted" style="font-weight:400">· pinned</span>' : ''), `<span class="muted">${x.mins ? x.mins + ' min' : 'Set drive time'}</span>${I.chev}`, 'editPlace', `data-id="${x.id}"`)).join('')}
+    ${row('➕', '<span class="accent">Add a place</span>', '', 'addPlace')}
     <div class="pad" style="padding-bottom:6px"><div class="muted" style="font-size:13px;margin-bottom:8px">Before-work checklist (comma separated)</div><input class="input" data-change="kit" value="${esc(S.kit || '')}" placeholder="Badge, Water bottle, Lunch"></div>
     <div class="pad muted" style="font-size:13px;padding-top:4px">Pay weeks run Sunday to Saturday, with time and a half past 40 hours. Unpaid break comes off shifts of 6 hours or more. Pick any one payday and Dash counts every two weeks from it. Set “Taxes withheld” from a real pay stub to see take-home.</div>
   </div>
@@ -1999,6 +2055,11 @@ const A = {
   editLink: el => linkSheet(byId('links', el.dataset.id)),
   deleteLink: el => removeWithUndo('links', el.dataset.id, 'Link'),
   addCountdown: () => countdownSheet(),
+  addPlace: () => placeSheet(),
+  editPlace: el => placeSheet(allPlaces().find(x => x.id === el.dataset.id)),
+  deletePlace: el => { const id = el.dataset.id; if (S.from === id) S.from = 'home'; closeSheet(); removeWithUndo('places', id, 'Place'); },
+  unpinPlace: el => { setPlaceLL(el.dataset.id, null); save(); closeSheet(); render(); toast('Pin removed'); },
+  setFrom: el => { S.from = el.dataset.id; save(); render(); },
   editCountdown: el => countdownSheet(byId('countdowns', el.dataset.id)),
   deleteCountdown: el => removeWithUndo('countdowns', el.dataset.id, 'Countdown'),
 
@@ -2172,6 +2233,21 @@ const FORMS = {
     if (id) Object.assign(byId('links', id), v); else S.links.push({ id: uid(), ...v });
     save(); closeSheet(); render();
   },
+  place: f => {
+    const d = Object.fromEntries(new FormData(f)), mins = Math.max(0, Math.min(240, +d.mins || 0));
+    let id = f.dataset.id;
+    if (id === 'home') S.commute = mins;
+    else if (id) Object.assign(byId('places', id), { name: d.name.trim(), icon: d.emoji || '📍', mins });
+    else { id = 'pl-' + uid(); (S.places = S.places || []).push({ id, name: d.name.trim(), icon: d.emoji || '📍', mins }); }
+    save(); closeSheet(); render();
+    if (d.pin) {
+      if (!navigator.geolocation) return toast('Location isn’t available here');
+      toast('Finding you…');
+      navigator.geolocation.getCurrentPosition(pos => {
+        setPlaceLL(id, { lat: +pos.coords.latitude.toFixed(4), lon: +pos.coords.longitude.toFixed(4) }); save(); render(); toast('Pinned here');
+      }, () => toast('Location blocked — allow it for Dash to pin'), { timeout: 12000 });
+    }
+  },
   countdown: f => {
     const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
     const v = { title: d.title.trim(), date: d.date, emoji: d.emoji || '⏳', yearly: !!d.yearly };
@@ -2204,6 +2280,8 @@ const CHANGES = {
   taxPct: el => { S.taxPct = Math.max(0, Math.min(60, +el.value || 0)); save(); },
   unpaidBreak: el => { S.unpaidBreak = Math.max(0, Math.min(120, +el.value || 0)); save(); },
   commute: el => { S.commute = Math.max(0, Math.min(180, +el.value || 0)); save(); },
+  early: el => { S.early = Math.max(0, Math.min(60, +el.value || 0)); save(); },
+  workAddr: el => { S.workAddr = el.value.trim(); save(); },
   payday: el => { S.payday = el.value; save(); },
   kit: el => { S.kit = el.value.split(',').map(x => x.trim()).filter(Boolean).join(', '); el.value = S.kit; save(); },
   wNba: el => { S.widgets.nba = el.checked; save(); },
@@ -2253,7 +2331,7 @@ document.addEventListener('visibilitychange', () => {
   if (!$('#sheet-root').innerHTML && !document.activeElement?.matches('input, textarea')) render();
   if (ghPoll) pollGithub();
   if (!S.calUrl && SY.vault) { CAL.ts = 0; loadCal().then(() => S.tab === 'settings' && softRender()); }
-  loadWeather(); syncNow();
+  loadWeather(); syncNow(); autoFrom();
 });
 addEventListener('online', syncNow);
 setInterval(() => document.visibilityState === 'visible' && (syncNow(), loadWidgets()), 60e3);
@@ -2267,6 +2345,7 @@ applyTheme();
 logShifts();
 render(true);
 queueReminders(6000);
+setTimeout(autoFrom, 1500);
 loadWeather();
 syncNow();
 // Returning from Google sign-in: the ID token arrives in the URL fragment.

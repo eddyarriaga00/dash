@@ -662,3 +662,8 @@ input.chip[type="date"] { min-height: 40px; color: var(--text); -webkit-appearan
 .bud-list { display: grid; gap: 12px; }
 .bud-top { display: flex; justify-content: space-between; font-size: 15px; font-weight: 600; }
 .quick-add input[type="time"] { min-width: 0; }
+
+/* leaving-from picker on the work card */
+.from { margin-top: 12px; }
+.from small { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.from a.habit-chip { text-decoration: none; color: inherit; display: inline-flex; align-items: center; white-space: nowrap; }

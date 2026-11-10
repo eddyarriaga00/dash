@@ -991,10 +991,10 @@ function viewSettings() {
   <div class="settings-label">Work schedule</div>
   <div class="list">
     ${row('💼', 'Status', `<span class="v">${S.calUrl ? (CAL.error ? 'Link not working' : `${(CAL.events || []).length} upcoming`) : !SY.vault ? 'Not set up yet' : CAL.at ? `${(CAL.events || []).length} shifts · sent ${ago(CAL.at).toLowerCase()}` : 'Waiting for your iPhone'}</span>`)}
-    <a class="row" href="Dash%20Shifts.shortcut" download="Dash Shifts.shortcut" data-a="getShortcut"><span class="ic">1️⃣</span><span class="row-title">Add the shortcut</span><span class="v">One time${I.chev}</span></a>
+    <a class="row" href="${SB_URL}/functions/v1/dash-shortcut" target="_blank" rel="noopener"><span class="ic">1️⃣</span><span class="row-title">Add the shortcut</span><span class="v">One time${I.chev}</span></a>
     ${row('2️⃣', 'Update shifts', `<span class="v">${I.chev}</span>`, 'updateShifts')}
     ${!S.calUrl && shiftCals().length > 1 ? `<div class="pad"><div class="muted" style="font-size:13px;margin-bottom:8px">Calendar with your shifts</div><div class="chips">${shiftCals().map(c => `<button class="chip ${S.workCal === c ? 'on' : ''}" data-a="setWorkCal" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></div>` : ''}
-    <div class="pad muted" style="font-size:13px">Tap 1 on your iPhone and pick <b>Shortcuts</b> (or save it to Files and open it there), then <b>Add Shortcut</b>. After that, tap 2 whenever you want fresh shifts. The first run asks to allow Calendar access.</div>
+    <div class="pad muted" style="font-size:13px">Tap 1 on your iPhone, tap <b>Download</b>, then open the downloaded file and tap <b>Add Shortcut</b>. After that, tap 2 whenever you want fresh shifts. The first run asks to allow Calendar access.</div>
     <div class="pad" style="padding-bottom:8px"><input class="input" data-change="calUrl" value="${esc(S.calUrl || '')}" placeholder="Or paste a public calendar link" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
     <div class="pad muted" style="font-size:13px;padding-top:0">Only for normal calendar feeds (school, Google, iCloud). Leave empty to use the shortcut.</div>
   </div>
@@ -1353,18 +1353,6 @@ const A = {
     if (S.calUrl) return loadCal(true);
     if (!SY.vault) { await enableSync(); if (!SY.vault || syncStatus !== 'ok') return toast('Couldn’t turn on sync — try again'); }
     CAL.ts = 0; runShortcut();
-  },
-  // GitHub serves the file as plain text, so hand it to iOS as a file: share sheet first, download as fallback.
-  getShortcut: async (el, e) => {
-    e.preventDefault();
-    try {
-      const blob = await (await fetch('Dash%20Shifts.shortcut')).blob();
-      const file = new File([blob], 'Dash Shifts.shortcut', { type: 'application/octet-stream' });
-      if (navigator.canShare?.({ files: [file] })) { try { await navigator.share({ files: [file] }); return; } catch (err) { if (err.name === 'AbortError') return; } }
-      const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = 'Dash Shifts.shortcut';
-      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60e3);
-      toast('Downloaded — open it from Files, then Add Shortcut');
-    } catch { toast('Couldn’t get the shortcut file'); }
   },
   setWorkCal: el => { S.workCal = el.dataset.v; save(); render(); },
   disableSync: () => {

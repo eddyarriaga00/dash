@@ -1,5 +1,5 @@
 // Bump VERSION whenever you deploy changes so phones pick up the new files.
-const VERSION = 'dash-v16';
+const VERSION = 'dash-v17';
 const ASSETS = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png'
@@ -31,4 +31,31 @@ self.addEventListener('fetch', e => {
       return cached || network;
     })
   );
+});
+
+// ---- Push notifications ----
+// The server sends an empty push; we ask it what to show for this device, then show it.
+const PUSH_FN = 'https://cwlpoykayfrpohfvzrfm.supabase.co/functions/v1/dash-push';
+const PUSH_KEY = 'sb_publishable_HNY1baadiiTnSl7CLRFxyg_i_RmTiYB'; // public by design
+self.addEventListener('push', e => {
+  e.waitUntil((async () => {
+    let items = [];
+    try {
+      const sub = await self.registration.pushManager.getSubscription();
+      const r = await fetch(PUSH_FN, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', apikey: PUSH_KEY, Authorization: `Bearer ${PUSH_KEY}` },
+        body: JSON.stringify({ action: 'pending', endpoint: sub && sub.endpoint }),
+      });
+      items = (await r.json()).items || [];
+    } catch { }
+    // A push must always show something, or the phone may stop delivering them.
+    if (!items.length) items = [{ title: 'Dash', body: 'You have a reminder.', tag: 'dash' }];
+    await Promise.all(items.map(i => self.registration.showNotification(i.title || 'Dash', {
+      body: i.body || '', tag: i.tag || undefined, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png',
+    })));
+  })());
+});
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => (cs[0] ? cs[0].focus() : self.clients.openWindow('./'))));
 });

@@ -653,3 +653,12 @@ input.chip[type="date"] { min-height: 40px; color: var(--text); -webkit-appearan
 .settings-label:not(.shut) { border-radius: 18px 18px 0 0; border-bottom-color: transparent; }
 .settings-label:not(.shut) + .list { margin-top: 0 !important; border-radius: 0 0 18px 18px; }
 .settings-label:active { opacity: .8; }
+
+/* ============ Habits v3, budgets ============ */
+.wk-goal { font-weight: 700; color: var(--accent); }
+.wk-goal.met { color: var(--ok); }
+.cat-chips { margin-top: 8px; gap: 6px; }
+.cat-chips .chip { padding: 6px 10px; font-size: 13px; }
+.bud-list { display: grid; gap: 12px; }
+.bud-top { display: flex; justify-content: space-between; font-size: 15px; font-weight: 600; }
+.quick-add input[type="time"] { min-width: 0; }

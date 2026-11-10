@@ -71,7 +71,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], budgets: {}, tags: ['School', 'Work', 'Personal', 'Errands'], tagFilter: '', spend: [], layout: null, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
+  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], budgets: {}, notify: { on: false, work: true, brief: true, habits: true, tasks: true, bills: true, lead: 15, morning: '08:00', evening: '20:30' }, tags: ['School', 'Work', 'Personal', 'Errands'], tagFilter: '', spend: [], layout: null, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
   kit: 'Badge, Water bottle, Lunch, Charger, Headphones', kitDone: { date: '', items: [] }, bills: [], billPaid: {},
   stocks: 'SPY, AAPL, NVDA',
   notes: [],
@@ -92,7 +92,7 @@ const DEFAULTS = () => ({
 function load() {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY));
-    if (raw && typeof raw === 'object') { const d = DEFAULTS(); return { ...d, ...raw, focus: { ...d.focus, ...raw.focus }, widgets: { ...d.widgets, ...raw.widgets } }; }
+    if (raw && typeof raw === 'object') { const d = DEFAULTS(); return { ...d, ...raw, focus: { ...d.focus, ...raw.focus }, widgets: { ...d.widgets, ...raw.widgets }, notify: { ...d.notify, ...raw.notify } }; }
   } catch { }
   return DEFAULTS();
 }
@@ -135,7 +135,7 @@ const newVault = () => 'dash-' + [...crypto.getRandomValues(new Uint8Array(24))]
 function payload() { const o = { ...S }; LOCAL_ONLY.forEach(k => delete o[k]); return o; }
 function adopt(data) {
   const keep = {}; LOCAL_ONLY.forEach(k => keep[k] = S[k]);
-  const d = DEFAULTS(); S = { ...d, ...data, ...keep, focus: { ...d.focus, ...data.focus }, widgets: { ...d.widgets, ...data.widgets } };
+  const d = DEFAULTS(); S = { ...d, ...data, ...keep, focus: { ...d.focus, ...data.focus }, widgets: { ...d.widgets, ...data.widgets }, notify: { ...d.notify, ...data.notify } };
   persist();
 }
 // Merge for when both sides changed: union lists by id, local edits win, deletions stick.
@@ -162,6 +162,7 @@ function merge(local, remote) {
   return out;
 }
 function markDirty() {
+  queueReminders();
   if (!SY.vault) return;
   SY.dirty = true; saveSY();
   clearTimeout(pushTimer); pushTimer = setTimeout(syncNow, 1500);
@@ -316,6 +317,90 @@ const AUTH_ICONS = {
   google: '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#4285F4" d="M23 12.3c0-.8-.1-1.6-.2-2.3H12v4.4h6.2a5.300 5.300 0 0 1-2.300 3.500v2.900h3.700c2.200-2 3.400-5 3.400-8.500z"/><path fill="#34A853" d="M12 23.500c3.100 0 5.700-1 7.600-2.800l-3.700-2.900c-1 .700-2.300 1.100-3.900 1.100-3 0-5.500-2-6.400-4.700H1.800v3A11.500 11.500 0 0 0 12 23.500z"/><path fill="#FBBC05" d="M5.600 14.200a6.900 6.900 0 0 1 0-4.400v-3H1.800a11.500 11.500 0 0 0 0 10.400z"/><path fill="#EA4335" d="M12 5.100c1.700 0 3.200.6 4.400 1.700l3.300-3.300A11.500 11.500 0 0 0 1.800 6.800l3.800 3c.9-2.700 3.400-4.700 6.400-4.700z"/></svg>',
   github: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.500 11.500 0 0 0-3.600 22.400c.6.100.8-.2.800-.600v-2c-3.200.700-3.900-1.400-3.900-1.400-.5-1.300-1.300-1.700-1.300-1.700-1-.700.100-.700.100-.700 1.200.100 1.800 1.200 1.800 1.200 1 1.800 2.700 1.300 3.400 1 .1-.800.4-1.300.7-1.600-2.600-.300-5.300-1.300-5.300-5.700 0-1.300.5-2.300 1.200-3.100-.1-.300-.5-1.500.1-3.100 0 0 1-.300 3.200 1.200a11 11 0 0 1 5.800 0C17.200 4.700 18.200 5 18.200 5c.6 1.600.2 2.800.1 3.100.8.800 1.200 1.800 1.200 3.100 0 4.400-2.700 5.400-5.300 5.700.4.400.8 1.100.8 2.200v3.200c0 .400.200.700.800.600A11.500 11.500 0 0 0 12 .5z"/></svg>',
 };
+
+/* =========================================================
+   NOTIFICATIONS. The app works out the next week's reminders and uploads them;
+   the server sends each one at its time as a push notification.
+   ========================================================= */
+const pushCall = async body => {
+  const r = await fetch(`${SB_URL}/functions/v1/dash-push`, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({})); if (!r.ok || j.error) throw new Error(j.error || r.status); return j;
+};
+const pushHere = () => { try { return localStorage.getItem('dash.push') || ''; } catch { return ''; } };
+const canPush = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const atTime = (day, hhmm) => { const [h, m] = String(hhmm || '08:00').split(':').map(Number); const d = parseKey(day); d.setHours(h || 0, m || 0, 0, 0); return d.getTime(); };
+function buildReminders() {
+  const N = S.notify || {}, now = Date.now(), out = [], all = shifts().filter(e => !e.allDay);
+  const add = (at, title, body, tag) => { if (at > now + 30e3 && at < now + 8 * 864e5) out.push({ at: new Date(at).toISOString(), title, body: body || '', tag }); };
+  for (let i = 0; i < 7; i++) {
+    const day = dkey(addDays(new Date(), i)), today = i === 0;
+    const sh = all.filter(e => dkey(new Date(e.start)) === day), due = S.tasks.filter(t => !t.done && t.due === day);
+    const bills = (S.bills || []).filter(b => dkey(billDue(b).date) === day), pd = nextPayday(), payday = pd && dkey(pd) === day;
+    // Morning brief: what the day holds
+    if (N.brief) {
+      const bits = [];
+      if (sh.length) bits.push(`Work ${tm(sh[0].start)}–${tm(sh[sh.length - 1].end)}`); else if (all.length) bits.push('No shift today');
+      if (due.length) bits.push(`${due.length} task${due.length === 1 ? '' : 's'} due`);
+      if (bills.length) bits.push(`${bills.map(b => b.name).join(', ')} due`);
+      if (payday) bits.push('Payday 💵');
+      if (bits.length) add(atTime(day, N.morning), 'Today', bits.join(' · '), 'brief-' + day);
+    }
+    // Work: time to leave, and a heads-up the evening before
+    if (N.work) for (const e of sh) {
+      const lead = (S.commute || 0) + (+N.lead || 15);
+      add(e.start - lead * 6e4, S.commute ? `Leave by ${tm(e.start - S.commute * 6e4)}` : `Shift in ${+N.lead || 15} min`, `${tm(e.start)} – ${tm(e.end)}${e.loc ? ' · ' + e.loc : ''}`, 'leave-' + e.start);
+      const early = new Date(e.start).getHours() < 12;
+      add(atTime(dkey(addDays(parseKey(day), -1)), '20:00'), `Work tomorrow ${tm(e.start)} – ${tm(e.end)}`, early ? `Bed by ${tm(e.start - ((S.commute || 0) + 45) * 6e4 - 8 * 36e5)} for 8 hours of sleep` : 'Pack what you need tonight', 'eve-' + e.start);
+    }
+    // Habits: each habit's own reminder time, plus one evening nudge
+    if (N.habits) {
+      for (const h of S.habits) if (h.remind && !(today && hOk(h)) && !(isWeekly(h) && weekMet(h))) add(atTime(day, h.remind), `${h.emoji} ${h.name}`, isWeekly(h) ? `${weekDone(h)}/${weekGoal(h)} this week` : 'Tap to check it off', 'habit-' + h.id + day);
+      const left = today ? S.habits.filter(h => !hOk(h)) : S.habits.filter(h => !isWeekly(h));
+      if (left.length) add(atTime(day, N.evening), today ? `${left.length} habit${left.length === 1 ? '' : 's'} left today` : 'Evening check-in', today ? left.slice(0, 4).map(h => h.name).join(', ') : 'Check off today’s habits', 'habits-' + day);
+    }
+    // Tasks with a due date: a midday nudge on the day
+    if (N.tasks && due.length) add(atTime(day, '13:00'), `${due.length} task${due.length === 1 ? '' : 's'} due today`, due.slice(0, 3).map(t => t.text).join(' · '), 'tasks-' + day);
+    // Bills: the evening before
+    if (N.bills) for (const b of bills) add(atTime(dkey(addDays(parseKey(day), -1)), '18:00'), `${b.emoji || '🧾'} ${b.name} due tomorrow`, b.amount ? `$${b.amount}` : '', 'bill-' + b.id + day);
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at));
+}
+let remTimer = null, remSig = '';
+function queueReminders(ms = 4000) {
+  if (!(S.notify && S.notify.on) || !SY.vault) return;
+  clearTimeout(remTimer); remTimer = setTimeout(() => uploadReminders(), ms);
+}
+async function uploadReminders(force) {
+  if (!(S.notify && S.notify.on) || !SY.vault || !navigator.onLine) return;
+  const items = buildReminders(), sig = JSON.stringify(items);
+  if (!force && sig === remSig) return;
+  try { await pushCall({ action: 'schedule', vault: SY.vault, items }); remSig = sig; } catch { }
+}
+async function enablePush() {
+  if (!canPush()) return toast(isIOS() && !isStandalone() ? 'Open Dash from its Home Screen icon first' : 'This browser can’t show notifications');
+  // Ask right away: iPhone only shows the prompt straight after a tap.
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') return toast('Notifications are off for Dash — turn them on in iPhone Settings');
+  try {
+    if (!SY.vault) { await enableSync(); if (!SY.vault) throw new Error('sync'); }
+    const { publicKey } = await pushCall({ action: 'key' });
+    const raw = atob(publicKey.replace(/-/g, '+').replace(/_/g, '/')), key = Uint8Array.from(raw, c => c.charCodeAt(0));
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    await pushCall({ action: 'subscribe', vault: SY.vault, endpoint: sub.endpoint });
+    try { localStorage.setItem('dash.push', sub.endpoint); } catch { }
+    S.notify = { ...S.notify, on: true }; save(); render();
+    await uploadReminders(true);
+    await pushCall({ action: 'test', vault: SY.vault });
+    toast('Notifications on — a test is on its way');
+  } catch { toast('Couldn’t turn notifications on — try again'); }
+}
+async function disablePush() {
+  const ep = pushHere();
+  try { const reg = await navigator.serviceWorker.ready, sub = await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch { }
+  try { if (ep) await pushCall({ action: 'unsubscribe', endpoint: ep }); localStorage.removeItem('dash.push'); } catch { }
+  render(); toast('Notifications off on this device');
+}
 
 /* ---------- theme ---------- */
 function applyTheme() {
@@ -728,7 +813,7 @@ async function loadCal(force) {
   }
   try { localStorage.setItem('dash.cal', JSON.stringify(CAL)); } catch { }
   calBusy = false;
-  logShifts();
+  logShifts(); queueReminders();
   if (S.tab === 'home' || S.tab === 'money') softRender();
 }
 const tm = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(':00', '').replace(/\s/g, ' ');
@@ -1396,18 +1481,18 @@ function viewHabits() {
       <div class="habit-top">
         <button class="habit-emoji" data-a="habitDetail" data-id="${h.id}" aria-label="Details">${h.emoji}</button>
         <div class="habit-info" data-a="habitDetail" data-id="${h.id}"><div class="habit-name">${esc(h.name)}</div>
-          <div class="habit-sub">${isWeekly(h) ? `<b class="wk-goal ${weekMet(h) ? 'met' : ''}">${weekDone(h)}/${weekGoal(h)} this week</b> · ` : ''}${s ? `🔥 ${s} ${isWeekly(h) ? 'wk' : 'day'}${s === 1 ? '' : 's'} · ` : ''}💪 ${strength(h)}%</div></div>
+          <div class="habit-sub">${isWeekly(h) ? `<b class="wk-goal ${weekMet(h) ? 'met' : ''}">${weekDone(h)}/${weekGoal(h)} this week</b> ` : ''}${[s ? `🔥 ${s} ${isWeekly(h) ? 'wk' : 'day'}${s === 1 ? '' : 's'}` : '', strength(h) ? `💪 ${strength(h)}%` : '', h.remind ? `🔔 ${tm(atTime(tk, h.remind))}` : ''].filter(Boolean).join(' · ') || (isWeekly(h) ? '' : 'Not started yet')}</div></div>
         <button class="habit-go ${done ? 'on' : ''}" data-a="toggleHabit" data-id="${h.id}" data-day="${tk}" aria-label="${done ? 'Undo' : 'Mark done'}">${done ? I.check : tg > 1 ? `<b>${c}/${tg}</b>` : I.check}</button>
       </div>
       <div class="week">${week.map(d => { const k = dkey(d), today = k === tk, part = hCount(h, k) > 0 && !hDone(h, k); return `<div class="wd ${today ? 'is-today' : ''}">${today ? 'Today' : d.toLocaleDateString(undefined, { weekday: 'narrow' })}
         <button class="${hDone(h, k) ? 'on' : part ? 'part' : ''}" data-a="toggleHabit" data-id="${h.id}" data-day="${k}" aria-label="${k}">${I.check}</button></div>`; }).join('')}</div>
     </section>`;
   };
-  const groups = Object.entries(WHEN).map(([k, [label, icon]]) => {
-    const list = S.habits.filter(h => (h.when || 'any') === k); if (!list.length) return '';
-    const d = list.filter(hOk).length;
-    return `<div class="group-label">${icon} ${label} <span class="muted" style="font-weight:600">· ${d}/${list.length}</span></div>${list.map(card).join('')}`;
-  }).join('');
+  const todo = (a, b) => hOk(a) - hOk(b) || (a.remind || '99').localeCompare(b.remind || '99');
+  const group = (label, list) => list.length ? `<div class="group-label">${label} <span class="muted" style="font-weight:600">· ${list.filter(hOk).length}/${list.length}</span></div>${[...list].sort(todo).map(card).join('')}` : '';
+  const daily = S.habits.filter(h => !isWeekly(h));
+  const groups = Object.entries(WHEN).map(([k, [label, icon]]) => group(`${icon} ${label}`, daily.filter(h => (h.when || 'any') === k))).join('')
+    + group('📆 Weekly goals', S.habits.filter(isWeekly));
   const have = new Set(S.habits.map(h => h.name.toLowerCase()));
   const ideas = HABIT_IDEAS.map((x, i) => [x, i]).filter(([x]) => !have.has(x[1].toLowerCase()));
   return `
@@ -1487,6 +1572,24 @@ function viewSettings() {
   <div class="list">
     <div class="pad"><div class="seg">${[['auto', 'Auto'], ['dark', 'Dark'], ['light', 'Light']].map(([k, l]) => `<button class="${S.theme === k ? 'on' : ''}" data-a="setTheme" data-v="${k}">${l}</button>`).join('')}</div></div>
     <div class="swatches" style="padding-top:0">${Object.entries(ACCENTS).map(([k, c]) => `<button class="swatch ${S.accent === k ? 'on' : ''}" style="background:${c};color:${c}" data-a="setAccent" data-v="${k}" aria-label="${k}"></button>`).join('')}</div>
+  </div>
+
+  <div class="settings-label">Notifications</div>
+  <div class="list">
+    ${pushHere() && S.notify.on ? `
+      ${row('🔔', 'On for this device', `<span class="v">${buildReminders().length} coming up</span>`)}
+      ${[['brief', '🌅', 'Morning brief'], ['work', '💼', 'Work: leave-by and night before'], ['habits', '🔥', 'Habit reminders'], ['tasks', '✅', 'Tasks due'], ['bills', '🧾', 'Bills due tomorrow']].map(([k, ic, l]) =>
+        row(ic, l, `<span class="toggle" style="margin-left:auto"><input type="checkbox" data-change="ntf" data-k="${k}" ${S.notify[k] ? 'checked' : ''}><i></i></span>`)).join('')}
+      ${row('⏰', 'Morning brief at', `<input class="inline" type="time" data-change="ntfTime" data-k="morning" value="${esc(S.notify.morning)}" style="width:auto">`)}
+      ${row('🌙', 'Evening check-in at', `<input class="inline" type="time" data-change="ntfTime" data-k="evening" value="${esc(S.notify.evening)}" style="width:auto">`)}
+      ${row('🚗', 'Warn me before leaving (min)', `<input class="inline num" type="number" inputmode="numeric" min="0" max="120" data-change="ntfLead" value="${S.notify.lead}">`)}
+      ${row('📨', 'Send a test', `<span class="v">${I.chev}</span>`, 'pushTest')}
+      ${row('🔕', '<span style="color:var(--danger)">Turn off on this device</span>', '', 'pushOff')}
+      <div class="pad muted" style="font-size:13px">Give any habit its own reminder time by editing the habit.</div>`
+    : `
+      <div class="pad muted" style="font-size:14px">Get reminders on your phone: when to leave for work, your shift tomorrow, medicine and other habits, tasks and bills due.</div>
+      <div class="pad" style="padding-top:0"><button class="btn" data-a="pushOn">Turn on notifications</button></div>
+      ${isIOS() && !isStandalone() ? `<div class="pad muted" style="font-size:13px;padding-top:0">On iPhone this only works from the Dash icon on your Home Screen, not in Safari.</div>` : ''}`}
   </div>
 
   <div class="settings-label">Home screen</div>
@@ -1574,7 +1677,7 @@ function viewSettings() {
    RENDER / NAV
    ========================================================= */
 const VIEWS = { home: viewHome, tasks: viewTasks, habits: viewHabits, money: viewMoney, notes: viewNotes, settings: viewSettings };
-const SET_ICON = { 'Account': '👤', 'Cloud sync': '☁️', 'Profile': '👋', 'Appearance': '🎨', 'Home screen': '🏠', 'Home widgets': '🧩', 'Work schedule': '💼', 'Work & pay': '💵',
+const SET_ICON = { 'Notifications': '🔔', 'Account': '👤', 'Cloud sync': '☁️', 'Profile': '👋', 'Appearance': '🎨', 'Home screen': '🏠', 'Home widgets': '🧩', 'Work schedule': '💼', 'Work & pay': '💵',
   'Bills': '🧾', 'Weather': '🌤️', 'Focus & water': '⏱️', 'Quick links': '🔗', 'Countdowns': '⏳', 'Your data': '📦' };
 const setOpen = new Set();
 // Settings is a menu: each group's heading opens and closes its list.
@@ -1711,6 +1814,8 @@ function habitSheet(h) {
     <label class="label">Times per day</label>
     <div class="chips" data-group="target">${[1, 2, 3, 4].map(n => `<button type="button" class="chip ${hTarget(h) === n ? 'on' : ''}" data-a="pickChip" data-v="${n}">${n}×</button>`).join('')}</div>
     <input type="hidden" name="target" value="${hTarget(h)}">
+    <label class="label">Remind me at</label>
+    <div class="quick-add"><input class="input" type="time" name="remind" value="${esc(h.remind || '')}"><button type="button" class="chip" data-a="clearRemind" style="flex:none">No reminder</button></div>
     <label class="label">Icon</label>${emojiPicker(HABIT_EMOJI, h.emoji)}
     <div class="btn-row"><button class="btn">${isNew ? 'Create habit' : 'Save'}</button></div>
   </form>`, { onMount: el => isNew && setTimeout(() => $('[name=name]', el).focus(), 350) });
@@ -1960,6 +2065,10 @@ const A = {
   openPay: () => { payMonth = 0; paySheet(); },
   payNav: el => { payMonth += +el.dataset.n; const y = $('.sheet')?.scrollTop || 0; paySheet(); const sh = $('.sheet'); if (sh) { sh.style.transition = 'none'; sh.scrollTop = y; requestAnimationFrame(() => sh.style.transition = ''); } },
   openSearch: () => searchSheet(),
+  clearRemind: el => { const i = el.closest('form')?.elements.remind; if (i) i.value = ''; },
+  pushOn: () => enablePush(),
+  pushOff: () => disablePush(),
+  pushTest: async () => { try { const r = await pushCall({ action: 'test', vault: SY.vault }); toast(r.sent ? 'Test sent — it should arrive in a few seconds' : 'No device is signed up yet'); } catch { toast('Couldn’t send the test'); } },
   editBudgets: () => budgetSheet(),
   // Category chips sit outside the form, so set the form's hidden field directly. Tap again to go back to auto.
   pickCat: el => {
@@ -2052,7 +2161,7 @@ const FORMS = {
   habit: f => {
     const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
     const wk = /^w[1-6]$/.test(d.freq || '');
-    const v = { name: d.name.trim(), emoji: d.emoji || '✅', when: d.when, target: +d.target || 1, per: wk ? 'week' : 'day', weekGoal: wk ? +d.freq.slice(1) : undefined };
+    const v = { name: d.name.trim(), emoji: d.emoji || '✅', when: d.when, target: +d.target || 1, per: wk ? 'week' : 'day', weekGoal: wk ? +d.freq.slice(1) : undefined, remind: d.remind || '' };
     if (id) Object.assign(byId('habits', id), v); else S.habits.push({ id: uid(), ...v, log: {} });
     save(); closeSheet(); render();
   },
@@ -2082,6 +2191,9 @@ const INPUTS = {
   },
 };
 const CHANGES = {
+  ntf: el => { S.notify = { ...S.notify, [el.dataset.k]: el.checked }; save(); },
+  ntfTime: el => { if (el.value) { S.notify = { ...S.notify, [el.dataset.k]: el.value }; save(); } },
+  ntfLead: el => { S.notify = { ...S.notify, lead: Math.max(0, Math.min(120, +el.value || 0)) }; save(); },
   layToggle: el => {
     const L = layout(), hidden = new Set(L.hidden); el.checked ? hidden.delete(el.dataset.id) : hidden.add(el.dataset.id);
     L.hidden = [...hidden]; save();
@@ -2154,6 +2266,7 @@ if (S.focus.running && focusLeft() <= 0) focusComplete(true);
 applyTheme();
 logShifts();
 render(true);
+queueReminders(6000);
 loadWeather();
 syncNow();
 // Returning from Google sign-in: the ID token arrives in the URL fragment.

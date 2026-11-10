@@ -20,7 +20,7 @@ Deno.serve(async (req) => {
       if (target.protocol !== "https:" || !ICS_HOSTS.some((re) => re.test(target.hostname))) {
         return new Response("host not allowed", { status: 400, headers: cors });
       }
-      const r = await fetch(target, { headers: { "User-Agent": "iOS/18.0 (22A000) dataaccessd/1.0", "Accept": "text/calendar,*/*" } });
+      const r = await fetch(target, { headers: { "User-Agent": "Dash/1.0 (personal dashboard)", "Accept": "text/calendar,*/*" } });
       const body = await r.text();
       if (!r.ok || !body.includes("BEGIN:VCALENDAR")) {
         return new Response(`feed unavailable (${r.status})`, { status: 502, headers: cors });

@@ -70,7 +70,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
+  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
   kit: 'Badge, Water bottle, Lunch, Charger, Headphones', kitDone: { date: '', items: [] }, bills: [], billPaid: {},
   stocks: 'SPY, AAPL, NVDA',
   notes: [],
@@ -209,7 +209,7 @@ async function syncNow() {
 }
 // Re-render unless the user is typing in the page.
 function softRender() {
-  applyTheme();
+  applyTheme(); logShifts();
   if ($('#sheet-root').innerHTML || document.activeElement?.closest?.('#view input, #view textarea')) return;
   render();
 }
@@ -714,6 +714,7 @@ function shifts() {
 const paidHours = (start, end) => { const h = (end - start) / 36e5; return Math.max(0, h - (h >= 6 ? (S.unpaidBreak || 0) / 60 : 0)); };
 // Remember shifts so pay estimates still know about days that have passed.
 function logShifts() {
+  const seen = calPayday(); if (seen && seen !== S.paydaySeen) { S.paydaySeen = seen; save(); }
   const now = Date.now(), log = { ...(S.shiftLog || {}) }, before = JSON.stringify(log), cutoff = now - 70 * 864e5;
   for (const k in log) if (Date.parse(k) > now || Date.parse(k) < cutoff) delete log[k];
   for (const e of shifts()) if (!e.allDay && e.end) log[new Date(e.start).toISOString()] = +((e.end - e.start) / 36e5).toFixed(2);
@@ -746,9 +747,11 @@ function paychecks(from, count) {
   }
   return out;
 }
+const calPayday = () => { const e = (CAL.url === calSrc() && CAL.events || []).find(x => /pay\s*day/i.test(x.title || '')); return e ? dkey(new Date(e.start)) : ''; };
 function nextPayday() {
-  if (!S.payday) return null;
-  const a = parseKey(S.payday), n = Math.max(0, Math.ceil(dayDiff(a, new Date()) / 14));
+  const anchor = S.payday || S.paydaySeen || '';
+  if (!anchor) return null;
+  const a = parseKey(anchor), n = Math.max(0, Math.ceil(dayDiff(a, new Date()) / 14));
   return addDays(a, n * 14);
 }
 function hourlyAt(t) {
@@ -1272,7 +1275,7 @@ function viewSettings() {
     ${row('💵', 'Hourly pay ($)', `<input class="inline num" type="number" inputmode="decimal" min="0" step="0.01" data-change="rate" value="${S.rate || ''}" placeholder="0">`)}
     ${row('🥪', 'Unpaid break (min)', `<input class="inline num" type="number" inputmode="numeric" min="0" max="120" data-change="unpaidBreak" value="${S.unpaidBreak || ''}" placeholder="0">`)}
     ${row('🏛️', 'Taxes withheld (%)', `<input class="inline num" type="number" inputmode="decimal" min="0" max="60" data-change="taxPct" value="${S.taxPct || ''}" placeholder="0">`)}
-    ${row('📆', 'A payday', `<input class="inline" type="date" data-change="payday" value="${esc(S.payday || '')}" style="width:auto">`)}
+    ${row('📆', 'A payday', `<input class="inline" type="date" data-change="payday" value="${esc(S.payday || S.paydaySeen || '')}" style="width:auto">`)}
     ${row('🚗', 'Commute (min)', `<input class="inline num" type="number" inputmode="numeric" min="0" max="180" data-change="commute" value="${S.commute || ''}" placeholder="0">`)}
     <div class="pad" style="padding-bottom:6px"><div class="muted" style="font-size:13px;margin-bottom:8px">Before-work checklist (comma separated)</div><input class="input" data-change="kit" value="${esc(S.kit || '')}" placeholder="Badge, Water bottle, Lunch"></div>
     <div class="pad muted" style="font-size:13px;padding-top:4px">Pay weeks run Sunday to Saturday, with time and a half past 40 hours. Unpaid break comes off shifts of 6 hours or more. Pick any one payday and Dash counts every two weeks from it. Set “Taxes withheld” from a real pay stub to see take-home.</div>
@@ -1811,6 +1814,7 @@ setInterval(() => document.visibilityState === 'visible' && (syncNow(), loadWidg
 if (S.tab === 'settings') S.tab = 'home';
 if (S.focus.running && focusLeft() <= 0) focusComplete(true);
 applyTheme();
+logShifts();
 render(true);
 loadWeather();
 syncNow();

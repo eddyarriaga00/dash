@@ -70,7 +70,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
+  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
   kit: 'Badge, Water bottle, Lunch, Charger, Headphones', kitDone: { date: '', items: [] }, bills: [], billPaid: {},
   stocks: 'SPY, AAPL, NVDA',
   notes: [],
@@ -141,7 +141,7 @@ function adopt(data) {
 function merge(local, remote) {
   const dead = { ...(remote._deleted || {}), ...(local._deleted || {}) };
   const out = { ...remote, ...local, _deleted: dead };
-  for (const k of ['tasks', 'habits', 'notes', 'links', 'countdowns', 'bills']) {
+  for (const k of ['tasks', 'habits', 'notes', 'links', 'countdowns', 'bills', 'xShifts']) {
     const rmap = new Map((remote[k] || []).map(x => [x.id, x])), seen = new Set(), list = [];
     for (const x of local[k] || []) {
       const r = rmap.get(x.id); seen.add(x.id);
@@ -704,13 +704,21 @@ const tm = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2
 const tshort = t => { const d = new Date(t), h = d.getHours(), m = d.getMinutes(); return `${h % 12 || 12}${m ? ':' + pad(m) : ''}${h < 12 ? 'a' : 'p'}`; };
 const dur = ms => { const h = ms / 36e5; return h >= 1 ? `${+h.toFixed(1)}h` : `${Math.round(ms / 6e4)}m`; };
 const money = n => '$' + Math.round(n).toLocaleString();
-// Work shifts currently known (today onward), limited to the chosen work calendar.
-function shifts() {
+// Shifts entered by hand (for ones the calendar feed doesn't have). Times are local, e.g. "2026-11-19T11:00".
+const manualShifts = () => (S.xShifts || []).map(x => ({ id: x.id, manual: true, title: 'Added by hand', start: new Date(x.start).getTime(), end: new Date(x.end).getTime(), allDay: false }))
+  .filter(e => !isNaN(e.start) && !isNaN(e.end));
+function calShifts() {
   if (!calSrc() || CAL.url !== calSrc()) return [];
   const cals = S.calUrl ? [] : shiftCals(), pick = cals.includes(S.workCal);
   if (cals.length > 1 && !pick) return [];
   return (CAL.events || []).filter(e => !pick || e.cal === S.workCal);
 }
+// Work shifts from today onward: the calendar's, plus hand-entered ones on days the calendar has nothing.
+function shifts() {
+  const cal = calShifts(), days = new Set(cal.filter(e => !e.allDay).map(e => dkey(new Date(e.start)))), from = parseKey(dkey()).getTime();
+  return [...cal, ...manualShifts().filter(e => e.end >= from && !days.has(dkey(new Date(e.start))))].sort((x, y) => x.start - y.start);
+}
+const unlogShift = x => { if (x && S.shiftLog) delete S.shiftLog[new Date(x.start).toISOString()]; };
 const paidHours = (start, end) => { const h = (end - start) / 36e5; return Math.max(0, h - (h >= 6 ? (S.unpaidBreak || 0) / 60 : 0)); };
 // Remember shifts so pay estimates still know about days that have passed.
 function logShifts() {
@@ -718,6 +726,9 @@ function logShifts() {
   const now = Date.now(), log = { ...(S.shiftLog || {}) }, before = JSON.stringify(log), cutoff = now - 70 * 864e5;
   for (const k in log) if (Date.parse(k) > now || Date.parse(k) < cutoff) delete log[k];
   for (const e of shifts()) if (!e.allDay && e.end) log[new Date(e.start).toISOString()] = +((e.end - e.start) / 36e5).toFixed(2);
+  // Hand-entered shifts on past days count too, unless that day is already logged from the calendar.
+  const logged = new Set(Object.keys(log).map(k => dkey(new Date(k))));
+  for (const e of manualShifts()) if (e.end < now && e.start > cutoff && !logged.has(dkey(new Date(e.start)))) log[new Date(e.start).toISOString()] = +((e.end - e.start) / 36e5).toFixed(2);
   if (JSON.stringify(log) !== before) { S.shiftLog = log; save(); }
 }
 // Paid hours between two times, from the log (past) and the live schedule (future).
@@ -760,15 +771,15 @@ function hourlyAt(t) {
   return i < 0 ? null : { temp: Math.round(d.hourly.temperature_2m[i]), rain: d.hourly.precipitation_probability[i], icon: wmo(d.hourly.weather_code[i], d.hourly.is_day[i]).icon };
 }
 function workCard() {
-  const src = calSrc(), mine = CAL.url === src;
-  if (!src || (!S.calUrl && !(mine && CAL.at))) return '';
-  const cals = S.calUrl ? [] : shiftCals();
+  const src = calSrc(), mine = CAL.url === src, byHand = (S.xShifts || []).length > 0;
+  if (!byHand && (!src || (!S.calUrl && !(mine && CAL.at)))) return '';
+  const cals = S.calUrl || !mine ? [] : shiftCals();
   if (cals.length > 1 && !cals.includes(S.workCal)) return `<section class="card" id="work">${secHead('💼 Work')}
     <div class="muted" style="margin-bottom:10px">Which calendar has your shifts?</div>
     <div class="chips">${cals.map(c => `<button class="chip" data-a="setWorkCal" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></section>`;
   const now = Date.now(), all = shifts(), evs = all.filter(e => (e.end || e.start + 36e5) > now);
-  const head = secHead(`💼 ${S.job ? esc(S.job) : 'Work'}`, !S.calUrl ? `<button class="link-btn" data-a="updateShifts">Update</button>` : '');
-  if (!evs.length) return `<section class="card" id="work">${head}<div class="muted">${CAL.error && S.calUrl ? 'Couldn’t load your schedule from that link.' : mine ? `No shifts coming up 🎉${CAL.at && now - CAL.at > 3 * 864e5 ? ' (last update from your iPhone was ' + ago(CAL.at).toLowerCase() + ')' : ''}` : 'Loading your schedule…'}</div></section>`;
+  const head = secHead(`💼 ${S.job ? esc(S.job) : 'Work'}`, `<span style="display:flex;gap:14px"><button class="link-btn" data-a="addShift">Add shift</button>${!S.calUrl ? `<button class="link-btn" data-a="updateShifts">Update</button>` : ''}</span>`);
+  if (!evs.length) return `<section class="card" id="work">${head}<div class="muted">${CAL.error && S.calUrl ? 'Couldn’t load your schedule from that link.' : mine || !src ? `No shifts coming up 🎉${CAL.at && now - CAL.at > 3 * 864e5 ? ' (last update from your iPhone was ' + ago(CAL.at).toLowerCase() + ')' : ''}` : 'Loading your schedule…'}</div></section>`;
   const dayName = t => { const n = dayDiff(new Date(), new Date(t)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
   const range = e => e.allDay ? 'All day' : `${tm(e.start)} – ${tm(e.end || e.start)}`;
   const [n, ...rest] = evs, on = n.start <= now && !n.allDay, soon = !n.allDay && !on && n.start - now < 30 * 36e5;
@@ -792,14 +803,14 @@ function workCard() {
   const done = S.kitDone && S.kitDone.date === today ? S.kitDone.items : [];
   const showKit = kit.length && dkey(new Date(n.start)) === today && !on;
   return `<section class="card" id="work">${head}
-    <div class="shift ${on ? 'on' : ''}">
+    <div class="shift ${on ? 'on' : ''}" ${n.manual ? `data-a="editShift" data-id="${n.id}" style="cursor:pointer"` : ''}>
       <div class="shift-when"><b>${dayName(n.start)}</b><span>${range(n)}</span></div>
       <div class="shift-meta"><span class="pill ${on ? 'live' : ''}">${status}</span><span class="muted">${esc(n.loc || n.title || '')}${!n.allDay && n.end ? ` · ${dur(n.end - n.start)}` : ''}</span></div>
       ${on ? `<div class="progress" style="margin:12px 0 0"><i style="width:${Math.min(100, (now - n.start) / (n.end - n.start) * 100)}%"></i></div>` : ''}
     </div>
     ${tips.length ? `<div class="tips">${tips.join('')}</div>` : ''}
     ${showKit ? `<div class="kit"><small>${done.length >= kit.length ? 'Ready to go ✓' : 'Before you go'}</small><div class="chip-row" style="margin-top:6px">${kit.map(k => `<button class="habit-chip ${done.includes(k) ? 'on' : ''}" data-a="kitToggle" data-v="${esc(k)}">${done.includes(k) ? '✓ ' : ''}${esc(k)}</button>`).join('')}</div></div>` : ''}
-    ${rest.length ? `<div class="shift-list">${rest.slice(0, 4).map(e => `<div class="shift-row"><b>${dayName(e.start)}</b><span>${range(e)}</span><span class="muted">${e.allDay || !e.end ? esc(e.title || '') : dur(e.end - e.start)}</span></div>`).join('')}</div>` : ''}
+    ${rest.length ? `<div class="shift-list">${rest.slice(0, 6).map(e => `<div class="shift-row" ${e.manual ? `data-a="editShift" data-id="${e.id}" style="cursor:pointer"` : ''}><b>${dayName(e.start)}${e.manual ? ' ✎' : ''}</b><span>${range(e)}</span><span class="muted">${e.allDay || !e.end ? esc(e.title || '') : dur(e.end - e.start)}</span></div>`).join('')}</div>` : ''}
   </section>`;
 }
 // 7-day strip: shifts, days off and tasks due, at a glance.
@@ -853,6 +864,7 @@ function paySheet() {
       <div class="stat"><small>Paid hours</small><b>${+mh.toFixed(1)}</b></div>
       <div class="stat"><small>${S.taxPct ? 'Take-home' : 'Gross'}</small><b>${money(S.taxPct ? takeHome(mh * S.rate) : mh * S.rate)}</b></div>
     </div>
+    <button class="btn secondary" data-a="addShift" style="margin-top:4px">${I.plus} Add a shift by hand</button>
     <label class="label">By week (Sun–Sat)</label>
     <div class="list" style="box-shadow:none">${weeks.map(x => `<div class="row ${x.start === thisWeek ? 'now' : ''}"><div><div class="row-title">${fmt(x.start)} – ${fmt(x.end - 864e5)}${x.start === thisWeek ? ' <span class="pill live" style="font-size:11px">this week</span>' : ''}</div>
       <div class="muted" style="font-size:13px">${x.h ? `${+x.h.toFixed(1)}h${x.ot ? ` · ${+x.ot.toFixed(1)}h overtime at 1.5×` : ''}` : 'No shifts'}</div></div>
@@ -862,7 +874,7 @@ function paySheet() {
       <div class="muted" style="font-size:13px">for ${fmt(c.from)} – ${fmt(c.to)} · ${+c.h.toFixed(1)}h</div></div>
       <div class="v" style="display:block;text-align:right"><b style="color:var(--text);font-size:17px">${c.h ? money(c.gross) : '—'}</b>${S.taxPct && c.h ? `<div style="font-size:12px">~${money(takeHome(c.gross))} net</div>` : ''}</div></div>`).join('')}</div>`
     : `<p class="muted" style="font-size:13px;margin-top:14px">Add one payday in Settings → Work & pay to see each paycheck.</p>`}
-    <p class="muted" style="font-size:12.5px;margin-top:14px">Estimates only. Dash knows the shifts your iPhone has sent: about two weeks ahead, and past days from when you started using it.${S.unpaidBreak ? ` ${S.unpaidBreak} min unpaid break taken off shifts of 6h or more.` : ''}</p>`, { full: false });
+    <p class="muted" style="font-size:12.5px;margin-top:14px">Estimates only. Dash knows the shifts your iPhone has sent (about two weeks ahead), shifts you add by hand, and past days from when you started using it.${S.unpaidBreak ? ` ${S.unpaidBreak} min unpaid break taken off shifts of 6h or more.` : ''}</p>`, { full: false });
 }
 
 // Bills: monthly, due on a day of the month.
@@ -1530,6 +1542,23 @@ function noteSheet(id) {
   });
 }
 
+function shiftSheet(x) {
+  const isNew = !x; x = x || { start: `${dkey()}T09:00`, end: `${dkey()}T17:00` };
+  openSheet(`
+  <form data-form="shift" data-id="${x.id || ''}" autocomplete="off">
+    <div class="sheet-title">${isNew ? 'Add a shift' : 'Edit shift'}</div>
+    <label class="label" style="margin-top:0">Day</label>
+    <input class="input" type="date" name="day" value="${x.start.slice(0, 10)}" required>
+    <div class="grid2" style="margin-top:10px">
+      <div><label class="label" style="margin-top:6px">Starts</label><input class="input" type="time" name="from" value="${x.start.slice(11, 16)}" required></div>
+      <div><label class="label" style="margin-top:6px">Ends</label><input class="input" type="time" name="to" value="${x.end.slice(11, 16)}" required></div>
+    </div>
+    <p class="muted" style="font-size:13px;margin-top:12px">For shifts your calendar doesn’t show yet. If the calendar later has a shift that day, Dash uses the calendar’s.</p>
+    <div class="btn-row"><button class="btn">${isNew ? 'Add shift' : 'Save'}</button>
+      ${isNew ? '' : `<button type="button" class="btn danger" data-a="deleteShift" data-id="${x.id}">Delete shift</button>`}</div>
+  </form>`);
+}
+
 function billSheet(b) {
   const isNew = !b; b = b || { name: '', amount: '', day: new Date().getDate(), emoji: '🧾' };
   openSheet(`
@@ -1676,6 +1705,9 @@ const A = {
   },
   openPay: () => { payMonth = 0; paySheet(); },
   payNav: el => { payMonth += +el.dataset.n; const y = $('.sheet')?.scrollTop || 0; paySheet(); const sh = $('.sheet'); if (sh) { sh.style.transition = 'none'; sh.scrollTop = y; requestAnimationFrame(() => sh.style.transition = ''); } },
+  addShift: () => shiftSheet(),
+  editShift: el => shiftSheet(byId('xShifts', el.dataset.id)),
+  deleteShift: el => { unlogShift(byId('xShifts', el.dataset.id)); removeWithUndo('xShifts', el.dataset.id, 'Shift'); logShifts(); render(); },
   addBill: () => billSheet(),
   editBill: el => billSheet(byId('bills', el.dataset.id)),
   deleteBill: el => removeWithUndo('bills', el.dataset.id, 'Bill'),
@@ -1695,6 +1727,16 @@ const A = {
 };
 
 const FORMS = {
+  shift: f => {
+    const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
+    if (!d.day || !d.from || !d.to) return;
+    // An end time at or before the start means the shift runs past midnight.
+    const endDay = d.to <= d.from ? dkey(addDays(parseKey(d.day), 1)) : d.day;
+    const v = { start: `${d.day}T${d.from}`, end: `${endDay}T${d.to}` };
+    S.xShifts = S.xShifts || [];
+    if (id) { unlogShift(byId('xShifts', id)); Object.assign(byId('xShifts', id), v); } else S.xShifts.push({ id: uid(), ...v });
+    save(); logShifts(); closeSheet(); render();
+  },
   bill: f => {
     const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
     const v = { name: d.name.trim(), amount: d.amount ? String(+d.amount) : '', day: Math.max(1, Math.min(31, +d.day || 1)), emoji: d.emoji || '🧾' };

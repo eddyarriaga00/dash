@@ -983,17 +983,8 @@ function workCard() {
 }
 // 7-day strip: shifts, days off and tasks due, at a glance.
 function weekCard() {
-  const all = shifts();
-  const days = Array.from({ length: 7 }, (_, i) => addDays(new Date(), i));
-  let hrs = 0, count = 0;
-  const cells = days.map((d, i) => {
-    const k = dkey(d), sh = all.filter(e => !e.allDay && dkey(new Date(e.start)) === k), due = S.tasks.filter(t => !t.done && t.due === k).length;
-    sh.forEach(e => { hrs += ((e.end || e.start) - e.start) / 36e5; count++; });
-    return `<div class="wkd ${i === 0 ? 't' : ''} ${sh.length ? 'has' : ''}" data-a="openCal" data-k="${k}" style="cursor:pointer"><small>${d.toLocaleDateString(undefined, { weekday: 'short' })}</small><b>${d.getDate()}</b>
-      ${sh.length ? `<span class="blk">${tshort(sh[0].start)}</span><span class="blk2">${tshort(sh[sh.length - 1].end || sh[0].start)}</span>` : '<span class="off">Off</span>'}
-      ${due ? `<i>${due}</i>` : ''}</div>`;
-  }).join('');
-  return `<section class="card" id="week">${secHead('Next 7 days', `<button class="link-btn" data-a="openCal">${count} shift${count === 1 ? '' : 's'} · ${+hrs.toFixed(1)}h · Calendar ›</button>`)}<div class="wk">${cells}</div></section>`;
+  if (!calView.sel) { calView.sel = dkey(); calView.ym = calView.sel.slice(0, 7); }
+  return `<section class="card" id="week">${secHead('🗓️ Calendar')}<div id="calbody">${calBody()}</div></section>`;
 }
 /* ---------- full calendar: any month, everything Dash knows about each day ---------- */
 const calView = { ym: '', sel: '' };
@@ -1054,16 +1045,16 @@ function calBody() {
         <span style="font-size:22px">${x.icon}</span><div><b style="font-size:15px;${x.done ? 'text-decoration:line-through;opacity:.6' : ''}">${esc(x.title)}</b><small>${esc(x.sub)}</small></div></div>`).join('')}</div>`
       : `<div class="muted" style="padding:6px 0 4px">Nothing on this day${diff >= 0 ? ' — a day off 🏖️' : ''}.</div>`}</div>`;
 }
+// The calendar lives on the home screen; this jumps to it on a given day.
 function calendarSheet(day) {
-  calView.sel = day || calView.sel || dkey(); calView.ym = calView.sel.slice(0, 7);
-  openSheet(`<div class="sheet-head"><div class="sheet-title" style="margin:0">Calendar</div><div class="spacer"></div><button class="ghost" data-a="closeSheet">Done</button></div>
-    <div id="calbody" style="overflow-y:auto;flex:1;margin:0 -4px;padding:0 4px">${calBody()}</div>`, { full: true, onMount: () => {
-    const el = $('#calbody'); if (!el) return; let x0 = null, y0 = 0;
-    el.addEventListener('touchstart', e => { const g = e.target.closest('#cal-g'); x0 = g ? e.touches[0].clientX : null; y0 = e.touches[0].clientY; }, { passive: true });
-    el.addEventListener('touchend', e => { if (x0 == null) return; const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0; x0 = null;
-      if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) calShift(dx < 0 ? 1 : -1); }, { passive: true });
-  }, onClose: () => setTimeout(() => S.tab === 'home' && !$('#sheet-root').innerHTML && render(), 0) });
+  calView.sel = day || dkey(); calView.ym = calView.sel.slice(0, 7);
+  if (S.tab !== 'home') { S.tab = 'home'; render(); } else calRedraw();
+  setTimeout(() => $('#week')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 }
+let calX = null, calY = 0;
+document.addEventListener('touchstart', e => { const g = e.target.closest?.('#cal-g'); calX = g ? e.touches[0].clientX : null; calY = e.touches[0].clientY; }, { passive: true });
+document.addEventListener('touchend', e => { if (calX == null) return; const dx = e.changedTouches[0].clientX - calX, dy = e.changedTouches[0].clientY - calY; calX = null;
+  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) calShift(dx < 0 ? 1 : -1); }, { passive: true });
 function calRedraw() { const el = $('#calbody'); if (el) el.innerHTML = calBody(); }
 function calShift(n) {
   const [y, m] = calView.ym.split('-').map(Number), d = new Date(y, m - 1 + n, 1);
@@ -1410,7 +1401,7 @@ function searchResults(q) {
 }
 
 /* ---------- home layout: sections you can collapse, reorder, and hide cards in ---------- */
-const CARD_LABEL = { weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Next 7 days', today: '🎯 Today progress', tasks: '✅ Up next', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
+const CARD_LABEL = { weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
   moneySum: '💳 Money summary', pay: '💵 Pay estimate', spend: '💸 Spending', bills: '🧾 Bills', stocks: '📈 Watchlist', nba: '🏀 NBA', anime: '📺 Anime', links: '🔗 Quick links', tools: '⏱️ Focus & water', countdowns: '⏳ Countdowns' };
 const SECTIONS = [['top', '', ['weather']], ['work', 'Work', ['work', 'week']], ['today', 'Today', ['today', 'tasks', 'habits', 'agenda', 'mood']],
   ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'stocks']], ['fun', 'For fun', ['nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']]];

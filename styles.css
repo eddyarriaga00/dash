@@ -688,3 +688,20 @@ input.chip[type="date"] { min-height: 40px; color: var(--text); -webkit-appearan
 i.d-event { background: #5ac8fa !important; } i.d-task { background: var(--danger) !important; } i.d-bill { background: var(--warn) !important; } i.d-pay { background: var(--ok) !important; } i.d-cd { background: #bf5af2 !important; }
 .cal-key { display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: center; margin-top: 10px; font-size: 11.5px; color: var(--muted); }
 .cal-key span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* calendar day rows: checkboxes for tasks, chevrons on rows that open something */
+.cal-row > div { flex: 1; min-width: 0; }
+.cal-row b { font-size: 15px; }
+.cal-ic { width: 28px; flex: none; display: grid; place-items: center; font-size: 22px; line-height: 1; }
+.cal-row .check { margin: 0; }
+.cal-row.p1 .check { border-color: var(--warn); }
+.cal-row.p2 .check { border-color: var(--danger); }
+.cal-row.done .check { background: var(--accent); border-color: var(--accent); color: #fff; animation: pop .3s; }
+.cal-row.done b { color: var(--faint); text-decoration: line-through; }
+.cal-row > svg.i { width: 16px; height: 16px; color: var(--faint); }
+.cal-wx { font-size: 13px; font-weight: 600; color: var(--muted); margin: -6px 0 10px; }
+
+/* work card: past the leave-by time, and the link down to the calendar */
+.tip.late { background: color-mix(in srgb, var(--danger) 24%, transparent); color: var(--text); }
+.link-btn.more { display: block; margin: 10px auto 0; font-size: 14px; }
+.cal-row small { white-space: normal; }

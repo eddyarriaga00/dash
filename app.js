@@ -990,7 +990,7 @@ function workCard() {
     <div class="chips">${cals.map(c => `<button class="chip" data-a="setWorkCal" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></section>`;
   const now = Date.now(), all = shifts(), evs = all.filter(e => (e.end || e.start + 36e5) > now);
   const head = secHead(`💼 ${S.job ? esc(S.job) : 'Work'}`, `<span style="display:flex;gap:14px"><button class="link-btn" data-a="addShift">+ Shift</button>${!S.calUrl ? `<button class="link-btn" data-a="updateShifts">Update</button>` : ''}</span>`);
-  if (!evs.length) return `<section class="card" id="work">${head}<div class="muted">${CAL.error && S.calUrl ? 'Couldn’t load your schedule from that link.' : mine || !src ? `No shifts coming up 🎉${CAL.at && now - CAL.at > 3 * 864e5 ? ' (last update from your iPhone was ' + ago(CAL.at).toLowerCase() + ')' : ''}` : 'Loading your schedule…'}</div></section>`;
+  if (!evs.length) return `<section class="card" id="work">${head}<button class="chip" data-a="openImport" style="margin-bottom:10px">📷 Add shifts from screenshots</button><div class="muted">${CAL.error && S.calUrl ? 'Couldn’t load your schedule from that link.' : mine || !src ? `No shifts coming up 🎉${CAL.at && now - CAL.at > 3 * 864e5 ? ' (last update from your iPhone was ' + ago(CAL.at).toLowerCase() + ')' : ''}` : 'Loading your schedule…'}</div></section>`;
   const dayName = t => { const n = dayDiff(new Date(), new Date(t)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
   const range = e => e.allDay ? 'All day' : `${tm(e.start)} – ${tm(e.end || e.start)}`;
   const [n, ...rest] = evs, on = n.start <= now && !n.allDay, soon = !n.allDay && !on && n.start - now < 30 * 36e5;
@@ -2112,11 +2112,100 @@ function noteSheet(id) {
   });
 }
 
+/* ---------- add shifts from schedule screenshots (read on the phone; pictures never leave it) ---------- */
+const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+const MON_RE = '(january|february|march|april|may|june|july|august|september|october|november|december)';
+// Reads a work-schedule list ("Sat / 28 / 9:30 AM-4:00 PM [6.50]") into one shift per day.
+// A day with several time ranges (segments, breaks) keeps the longest one, which is the whole shift.
+function parseSchedule(txt) {
+  const out = {}, now = new Date();
+  let y = now.getFullYear(), mo = null, last = 0, day = null, wdPending = false;
+  const hdr = txt.match(new RegExp(`\\b${MON_RE}\\s+(\\d{4})\\b`, 'i'));
+  if (hdr) { mo = MONTHS.indexOf(hdr[1].toLowerCase()); y = +hdr[2]; }
+  const mins = (t, ap) => { let [h, m] = t.split(/[:.]/).map(Number); if (/p/i.test(ap) && h < 12) h += 12; if (/a/i.test(ap) && h === 12) h = 0; return h * 60 + m; };
+  for (let ln of txt.replace(/[–—−~]/g, '-').split(/\r?\n/)) {
+    ln = ln.trim(); if (!ln) continue;
+    const wk = ln.match(new RegExp(`^${MON_RE}\\s+(\\d{1,2})\\s*-`, 'i'));
+    if (wk) {
+      const m2 = MONTHS.indexOf(wk[1].toLowerCase());
+      if (mo != null && m2 < mo && mo - m2 > 6) y++;
+      mo = m2; last = +wk[2] - 1; day = null; wdPending = false; continue;
+    }
+    const m = ln.match(/^(?:(sun|mon|tue|wed|thu|fri|sat)[a-z]*\.?\s*)?(?:(\d{1,2})(?![\d:.]))?/i);
+    const n = m[2] && (m[1] || wdPending) ? +m[2] : null;
+    wdPending = !!m[1] && !m[2];
+    if (n != null && n >= 1 && n <= 31 && mo != null) {
+      if (n < last - 7) { mo++; if (mo > 11) { mo = 0; y++; } }
+      last = n; day = `${y}-${pad(mo + 1)}-${pad(n)}`;
+    }
+    const r = ln.match(/(\d{1,2}[:.]\d{2})\s*([AP])\.?\s*M\.?\s*-\s*(\d{1,2}[:.]\d{2})\s*([AP])\.?\s*M/i);
+    if (r && day) {
+      const a = mins(r[1], r[2]), b = mins(r[3], r[4]), len = (b - a + 1440) % 1440;
+      if (len && (!out[day] || len > out[day].len)) out[day] = { day, a, b, len };
+    }
+  }
+  return out;
+}
+let IMP = [];
+function importSheet() {
+  IMP = [];
+  openSheet(`
+    <div class="sheet-head"><div class="sheet-title" style="margin:0">Shifts from screenshots</div><div class="spacer"></div><button class="ghost" data-a="closeSheet">Cancel</button></div>
+    <p class="muted" style="font-size:14px;margin:0 0 14px">Screenshot your schedule (scroll and take a few to cover more weeks), then pick them here. Dash reads them on your phone — the pictures aren’t uploaded.</p>
+    <label class="btn" style="display:block;text-align:center;cursor:pointer">📷 Choose screenshots<input type="file" id="imp-files" accept="image/*" multiple hidden></label>
+    <details style="margin-top:14px"><summary class="muted" style="font-size:14px">Or paste the schedule as text</summary>
+      <textarea class="input" id="imp-text" rows="6" style="margin-top:8px" placeholder="November 2026&#10;Sat 28  9:30 AM-4:00 PM"></textarea>
+      <button type="button" class="btn secondary" data-a="impText" style="margin-top:8px">Read it</button></details>
+    <div id="imp-out" style="margin-top:14px"></div>`);
+}
+const impOut = html => { const el = $('#imp-out'); if (el) el.innerHTML = html; };
+let tessP = null;
+const loadTess = () => tessP || (tessP = new Promise((ok, bad) => {
+  const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+  sc.onload = ok; sc.onerror = () => { tessP = null; bad(new Error('load')); }; document.head.appendChild(sc);
+}));
+async function importImages(files) {
+  files = [...files].slice(0, 12); if (!files.length) return;
+  impOut(`<div class="muted">Getting the reader ready…</div>`);
+  const texts = [];
+  try {
+    await loadTess();
+    const w = await Tesseract.createWorker('eng');
+    for (let i = 0; i < files.length; i++) {
+      impOut(`<div class="muted">Reading screenshot ${i + 1} of ${files.length}…</div><div class="progress" style="margin-top:8px"><i style="width:${Math.round(i / files.length * 100)}%"></i></div>`);
+      texts.push((await w.recognize(files[i])).data.text);
+    }
+    await w.terminate();
+  } catch { return impOut(`<div class="muted">Couldn’t read the screenshots — check your connection and try again, or paste the text instead.</div>`); }
+  showImport(texts);
+}
+function showImport(texts) {
+  const found = {}; for (const t of texts) Object.assign(found, parseSchedule(t));
+  const have = new Set(shifts().filter(e => !e.allDay).map(e => dkey(new Date(e.start))));
+  IMP = Object.values(found).sort((a, b) => a.day.localeCompare(b.day));
+  if (!IMP.length) return impOut(`<div class="muted">No shifts found. Make sure the screenshots show the dates and times, like “Sat 28 · 9:30 AM–4:00 PM”.</div>`);
+  const hm = v => tm(parseKey(dkey()).getTime() + v * 6e4);
+  impOut(`<label class="label" style="margin-top:0">Found ${IMP.length} shift${IMP.length === 1 ? '' : 's'} — untick any you’re not working</label>
+    <div class="list" style="box-shadow:none">${IMP.map((x, i) => `<label class="row"><span class="row-title" style="flex:1">${parseKey(x.day).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}<small class="muted" style="display:block;font-weight:500">${hm(x.a)} – ${hm(x.b)} · ${+(x.len / 60).toFixed(2)}h${have.has(x.day) ? ' · replaces what Dash has' : ''}</small></span>
+      <span class="toggle"><input type="checkbox" data-imp="${i}" checked><i></i></span></label>`).join('')}</div>
+    <div class="btn-row"><button class="btn" data-a="impSave">Add shifts</button></div>`);
+}
+function saveImport() {
+  const pick = IMP.filter((x, i) => $(`[data-imp="${i}"]`)?.checked); if (!pick.length) return toast('Nothing selected');
+  const t = v => `${pad(Math.floor(v / 60))}:${pad(v % 60)}`, days = new Set(pick.map(x => x.day));
+  S.xShifts = S.xShifts || [];
+  for (const x of S.xShifts.filter(x => days.has(x.start.slice(0, 10)))) unlogShift(x);
+  S.xShifts = S.xShifts.filter(x => !days.has(x.start.slice(0, 10)));
+  for (const x of pick) S.xShifts.push({ id: uid(), start: `${x.day}T${t(x.a)}`, end: `${x.b <= x.a ? dkey(addDays(parseKey(x.day), 1)) : x.day}T${t(x.b)}` });
+  save(); logShifts(); closeSheet(); render(); toast(`Added ${pick.length} shift${pick.length === 1 ? '' : 's'}`);
+}
+
 function shiftSheet(x) {
   const isNew = !x || !x.id; x = x || { start: `${dkey()}T09:00`, end: `${dkey()}T17:00` };
   openSheet(`
   <form data-form="shift" data-id="${x.id || ''}" autocomplete="off">
     <div class="sheet-title">${isNew ? 'Add a shift' : 'Edit shift'}</div>
+    ${isNew ? `<button type="button" class="btn secondary" data-a="openImport" style="margin:0 0 14px">📷 Add several from screenshots</button>` : ''}
     <label class="label" style="margin-top:0">Day</label>
     <input class="input" type="date" name="day" value="${x.start.slice(0, 10)}" required>
     <div class="grid2" style="margin-top:10px">
@@ -2315,6 +2404,9 @@ const A = {
   layReset: () => { S.layout = LAYOUT_DEFAULT(); save(); customizeSheet(); },
   delSpend: el => removeWithUndo('spend', el.dataset.id, 'Expense'),
   addShift: () => shiftSheet(),
+  openImport: () => importSheet(),
+  impText: () => showImport([$('#imp-text')?.value || '']),
+  impSave: () => saveImport(),
   editShift: el => shiftSheet(byId('xShifts', el.dataset.id)),
   deleteShift: el => { unlogShift(byId('xShifts', el.dataset.id)); removeWithUndo('xShifts', el.dataset.id, 'Shift'); logShifts(); render(); },
   addBill: () => billSheet(),
@@ -2472,6 +2564,7 @@ document.addEventListener('submit', e => { e.preventDefault(); FORMS[e.target.da
 document.addEventListener('input', e => INPUTS[e.target.dataset.input]?.(e.target));
 document.addEventListener('change', e => {
   CHANGES[e.target.dataset.change]?.(e.target);
+  if (e.target.id === 'imp-files' && e.target.files.length) { importImages(e.target.files); e.target.value = ''; }
   if (e.target.id === 'import-file' && e.target.files[0]) {
     e.target.files[0].text().then(txt => {
       const j = JSON.parse(txt), data = j.data || j;

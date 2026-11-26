@@ -894,19 +894,6 @@ body::before { display: none; }                                   /* flat backgr
 @media (prefers-reduced-motion: reduce) { .today.draw .rg-fg, .task.done .check, .cal-row.done .check { animation: none; } }
 
 /* ---------- v28: School (Canvas), StockBot portfolio, your anime ---------- */
-.sch-list { display: grid; }
-.sch { display: flex; align-items: center; gap: 12px; padding: 10px 0; position: relative; }
-.sch + .sch::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: .5px; background: var(--border); }
-.sch-b { flex: 1; min-width: 0; display: grid; gap: 2px; }
-.sch-b .tag { justify-self: start; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
-.sch-b b { font-size: 16px; font-weight: 500; line-height: 1.25; }
-.sch-b small { font-size: 13px; color: var(--muted); }
-.sch.soon .sch-b small { color: var(--warn); font-weight: 600; }
-.sch-add { flex: none; width: 32px; height: 32px; border-radius: 50%; border: 0; display: grid; place-items: center; cursor: pointer;
-  background: var(--surface-2); color: var(--accent); transition: transform .2s cubic-bezier(.3, 1.6, .5, 1); }
-.sch-add svg.i { width: 16px; height: 16px; }
-.sch-add.on { background: var(--ok); color: #fff; }
-.sch-add:active { transform: scale(.88); }
 .pf-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .pf-top b { font-size: 30px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .pf-pos { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }

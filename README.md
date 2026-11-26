@@ -38,6 +38,5 @@ After you change any files, bump `VERSION` in `sw.js` (for example `dash-v2`). T
 ```bash
 python3 -m http.server 8787
 ```
-- **School:** paste your Canvas calendar feed link in Settings → School to see assignments due on Home and turn them into tasks with one tap.
 - **StockBot:** a Money card reads StockBot's published `core.json` (equity, today's P/L, positions).
 - **Rings, haptics, badge:** Fitness-style rings for tasks, habits and focus; light haptics on iPhone; the app icon shows tasks due.

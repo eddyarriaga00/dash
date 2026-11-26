@@ -80,7 +80,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true }, team: '', calUrl: '', workCal: '', paydaySeen: '', xShifts: [], budgets: {}, notify: { on: false, work: true, brief: true, habits: true, tasks: true, bills: true, lead: 15, morning: '08:00', evening: '20:30' }, tags: ['School', 'Work', 'Personal', 'Errands'], tagFilter: '', spend: [], layout: null, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
+  widgets: { nba: true, anime: true, portfolio: true }, team: '', calUrl: '', canvasUrl: '', canvasAdded: {}, workCal: '', paydaySeen: '', xShifts: [], budgets: {}, notify: { on: false, work: true, brief: true, habits: true, tasks: true, bills: true, lead: 15, morning: '08:00', evening: '20:30' }, tags: ['School', 'Work', 'Personal', 'Errands'], tagFilter: '', spend: [], layout: null, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
   kit: 'Badge, Water bottle, Lunch, Charger, Headphones', kitDone: { date: '', items: [] }, bills: [], billPaid: {},
   stocks: 'SPY, AAPL, NVDA',
   notes: [],
@@ -877,18 +877,100 @@ async function loadAnime() {
   } catch { ANI.list = ANI.list || []; }
   const el = $('#anime'); if (el) el.outerHTML = animeCard();
 }
+function myAnime() {
+  try { const o = JSON.parse(localStorage.getItem('anitrack.list.v1')) || {}; return new Map(Object.values(o).filter(x => x.status === 'watching' || x.status === 'plan_to_watch').map(x => [x.alId, x])); } catch { return new Map(); }
+}
 function animeCard() {
   if (!S.widgets.anime) return '';
-  const now = Date.now() / 1000;
+  const now = Date.now() / 1000, mine = myAnime();
+  if (ANI.list && mine.size) ANI.list.sort((x, y) => (mine.has(y.media.id) - mine.has(x.media.id)) || x.airingAt - y.airingAt);
   return `<section class="card" id="anime">
     ${secHead('📺 Airing today', `<a class="link-btn" href="https://eddyarriaga00.github.io/anitrack/" target="_blank" rel="noopener">AniTrack</a>`)}
     ${!ANI.list ? '<div class="muted">Loading schedule…</div>' : !ANI.list.length ? '<div class="muted">Nothing airing today.</div>' : `<div class="cd-row">${ANI.list.map(x => `
-      <a class="ani ${x.airingAt < now ? 'aired' : ''}" href="${esc(x.media.siteUrl)}" target="_blank" rel="noopener">
+      <a class="ani ${x.airingAt < now ? 'aired' : ''} ${mine.has(x.media.id) ? 'mine' : ''}" href="${mine.has(x.media.id) ? `https://eddyarriaga00.github.io/anitrack/#anime/${x.media.id}` : esc(x.media.siteUrl)}" target="_blank" rel="noopener">
         <img src="${esc(x.media.coverImage.medium)}" alt="" loading="lazy">
         <span class="t">${esc(x.media.title.english || x.media.title.romaji)}</span>
-        <span class="d">Ep ${x.episode} · ${x.airingAt < now ? 'Out now' : new Date(x.airingAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></a>`).join('')}</div>`}
+        <span class="d">${mine.has(x.media.id) ? (mine.get(x.media.id).status === 'watching' ? `★ You’re on ep ${mine.get(x.media.id).watched || 0} · ` : '★ On your list · ') : ''}Ep ${x.episode} · ${x.airingAt < now ? 'Out now' : new Date(x.airingAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></a>`).join('')}</div>`}
   </section>`;
 }
+/* ---------- School: Canvas assignments from your Canvas calendar feed ---------- */
+// Canvas → Calendar → "Calendar Feed" gives a private .ics link; Dash reads it through dash-proxy.
+let CNV = (() => { try { return JSON.parse(localStorage.getItem('dash.canvas')) || {}; } catch { return {}; } })(), cnvBusy = false;
+async function loadCanvas(force) {
+  const url = S.canvasUrl; if (!url || cnvBusy) return;
+  if (!force && CNV.url === url && Date.now() - CNV.ts < 60 * 60e3) return;
+  cnvBusy = true;
+  try {
+    const r = await proxy(`kind=ics&url=${encodeURIComponent(url)}`); if (!r.ok) throw new Error(r.status);
+    const from = Date.now() - 864e5, to = Date.now() + 21 * 864e5;
+    const items = parseICS(await r.text()).filter(e => e.start >= from && e.start < to).slice(0, 60).map(e => {
+      const m = (e.title || '').match(/^(.*?)\s*\[([^\]]+)\]\s*$/);
+      // Canvas all-day "due" dates mean the end of that day
+      return { uid: e.uid || e.title + e.start, title: m ? m[1] : e.title || 'Untitled', course: m ? m[2].replace(/-\d{2,}.*$/, '').replace(/_/g, ' ') : '', due: e.allDay ? e.start + 864e5 - 6e4 : e.start, link: e.link || '' };
+    });
+    CNV = { url, ts: Date.now(), items, error: false };
+    if (force) toast(items.length ? `Canvas connected · ${items.length} coming up` : 'Connected, nothing due soon');
+  } catch { CNV = { ...CNV, url, ts: Date.now(), error: true }; if (force) toast('Couldn’t read that Canvas link'); }
+  cnvBusy = false;
+  try { localStorage.setItem('dash.canvas', JSON.stringify(CNV)); } catch { }
+  const el = $('#school'); if (el) el.outerHTML = schoolCard();
+}
+const canvasItems = () => CNV.url === S.canvasUrl ? (CNV.items || []).filter(x => x.due > Date.now() - 6 * 36e5) : [];
+function schoolCard() {
+  if (!S.canvasUrl) return '';
+  const list = canvasItems(), added = S.canvasAdded || {};
+  const when = t => { const n = dayDiff(new Date(), new Date(t)); return (n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })) + ' · ' + tm(t); };
+  const fresh = list.filter(x => !added[x.uid]);
+  return `<section class="card" id="school">
+    ${secHead('📚 School', fresh.length > 1 ? `<button class="link-btn" data-a="canvasAll">Add all to tasks</button>` : '')}
+    ${!CNV.ts ? '<div class="muted">Loading Canvas…</div>' : CNV.error && !list.length ? '<div class="muted">Couldn’t reach Canvas. Check the link in Settings.</div>'
+      : !list.length ? '<div class="empty"><div class="big">🎓</div><b>Nothing due</b>No assignments in the next 3 weeks.</div>'
+      : `<div class="sch-list">${list.slice(0, 6).map(x => { const d = dayDiff(new Date(), new Date(x.due)), on = added[x.uid];
+        return `<div class="sch ${d <= 1 ? 'soon' : ''}">
+          <div class="sch-b">${x.course ? `<span class="tag">${esc(x.course)}</span>` : ''}<b>${esc(x.title)}</b><small>Due ${when(x.due)}</small></div>
+          <button class="sch-add ${on ? 'on' : ''}" data-a="canvasAdd" data-uid="${esc(x.uid)}" aria-label="${on ? 'Added to tasks' : 'Add to tasks'}">${on ? I.check : I.plus}</button></div>`; }).join('')}</div>
+        ${list.length > 6 ? `<div class="muted" style="font-size:13px;margin-top:8px">+ ${list.length - 6} more in the next 3 weeks</div>` : ''}`}
+  </section>`;
+}
+function canvasToTask(x) {
+  S.canvasAdded = { ...(S.canvasAdded || {}) };
+  if (S.canvasAdded[x.uid]) return false;
+  const id = uid(), soon = x.due - Date.now() < 2 * 864e5;
+  S.tasks.push({ id, text: x.title + (x.course ? ` (${x.course})` : ''), done: false, due: dkey(new Date(x.due)), priority: soon ? 1 : 0, repeat: '', tag: 'School', created: Date.now() });
+  S.canvasAdded[x.uid] = id;
+  for (const k in S.canvasAdded) if (!(CNV.items || []).some(y => y.uid === k) && !S.tasks.some(t => t.id === S.canvasAdded[k])) delete S.canvasAdded[k];
+  return true;
+}
+
+/* ---------- StockBot portfolio (your bot publishes core.json next to its site) ---------- */
+const PF_URL = 'https://eddyarriaga00.github.io/StockBot/data/core.json';
+let PF = {};
+async function loadPortfolio() {
+  if (!S.widgets.portfolio || Date.now() - (PF.ts || 0) < 5 * 60e3) return;
+  PF.ts = Date.now();
+  try {
+    const d = await (await fetch(PF_URL + '?t=' + Math.floor(Date.now() / 3e5), { cache: 'no-store' })).json();
+    const a = d.account?.account || {};
+    PF = { ts: Date.now(), ok: true, at: (+d.updated || 0) * 1000, eq: +a.equity, day: +a.day_pl, dayPct: +a.day_pl_pct, tot: +a.total_pl, totPct: +a.total_pl_pct,
+      open: !!d.clock?.is_open, bot: d.bot?.strategy_name || '',
+      pos: (d.account?.positions || []).map(x => ({ s: x.symbol, v: +x.market_value, pct: +x.unrealized_pl_pct, day: +x.day_pl_pct })).sort((x, y) => y.v - x.v) };
+  } catch { PF = { ts: Date.now(), ok: false }; }
+  const el = $('#portfolio'); if (el) el.outerHTML = portfolioCard();
+}
+function portfolioCard() {
+  if (!S.widgets.portfolio || PF.ok === false) return '<span id="portfolio" hidden></span>';
+  if (!PF.ok) return `<section class="card" id="portfolio">${secHead('🤖 StockBot')}<div class="muted">Loading…</div></section>`;
+  const usd = n => (n < 0 ? '−$' : '$') + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pct = n => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(2)}%`;
+  const stale = Date.now() - PF.at > 26 * 36e5;
+  return `<section class="card pressable" id="portfolio">
+    ${secHead('🤖 StockBot', `<a class="link-btn" href="https://eddyarriaga00.github.io/StockBot/" target="_blank" rel="noopener">Open</a>`)}
+    <div class="pf-top"><b>${usd(PF.eq)}</b><span class="chg ${PF.day >= 0 ? 'up' : 'down'}">${PF.day >= 0 ? '+' : '−'}${usd(Math.abs(PF.day))} (${pct(PF.dayPct)}) today</span></div>
+    <div class="muted" style="font-size:13px;margin:2px 0 10px">All time <span class="${PF.tot >= 0 ? 'pos' : 'neg'}">${usd(PF.tot)} (${pct(PF.totPct)})</span>${PF.bot ? ` · ${esc(PF.bot)}` : ''} · ${stale ? `<span class="neg">last update ${/ago|now/i.test(ago(PF.at)) ? ago(PF.at).toLowerCase() : ago(PF.at)}</span>` : `updated ${ago(PF.at).toLowerCase()}`}</div>
+    ${PF.pos.length ? `<div class="pf-pos">${PF.pos.slice(0, 6).map(x => `<div><b>${esc(x.s)}</b><span class="chg ${x.pct >= 0 ? 'up' : 'down'}">${pct(x.pct)}</span></div>`).join('')}</div>` : '<div class="muted">No open positions.</div>'}
+  </section>`;
+}
+
 /* ---------- work schedule (calendar feed) + stocks, via the dash-proxy edge function ---------- */
 const proxy = q => fetch(`${SB_URL}/functions/v1/dash-proxy?${q}`, { headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` } });
 let CAL = (() => { try { return JSON.parse(localStorage.getItem('dash.cal')) || {}; } catch { return {}; } })();
@@ -908,6 +990,8 @@ function parseICS(txt) {
       const i = ln.indexOf(':'); if (i < 0) continue;
       const name = ln.slice(0, i).split(';')[0], v = ln.slice(i + 1);
       if (name === 'SUMMARY') e.title = un(v);
+      else if (name === 'UID') e.uid = v.trim();
+      else if (name === 'URL') e.link = v.trim();
       else if (name === 'LOCATION') e.loc = un(v);
       else if (name === 'DTSTART') { const r = when(v); if (r) { e.start = r.t; e.allDay = !!r.allDay; } }
       else if (name === 'DTEND') e.end = when(v)?.t;
@@ -1346,7 +1430,7 @@ function stocksCard() {
         <div class="px"><b>${x.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b><span class="chg ${up ? 'up' : 'down'}">${up ? '+' : ''}${ch.toFixed(2)}%</span></div></div>`; }).join('')}</div>`}
   </section>`;
 }
-const loadWidgets = () => { if (S.tab === 'home') { loadNBA(); loadAnime(); } if (S.tab === 'home' || S.tab === 'money') { loadCal(); loadStocks(); } };
+const loadWidgets = () => { if (S.tab === 'home') { loadNBA(); loadAnime(); loadCanvas(); loadPortfolio(); } if (S.tab === 'home' || S.tab === 'money') { loadCal(); loadStocks(); } };
 
 /* =========================================================
    FOCUS TIMER
@@ -1470,6 +1554,8 @@ function viewHome() {
     nba: () => nbaCard(),
     anime: () => animeCard(),
     stocks: () => stocksCard(),
+    school: () => schoolCard(),
+    portfolio: () => portfolioCard(),
     today: () => `<section class="card">
     <div class="today ${ringsDrawn ? '' : 'draw'}">
       <div class="ring-wrap">${rings([tt.total ? tt.done.length / tt.total : 0, dueH.length ? nDone / dueH.length : 0, sessions / FOCUS_GOAL])}</div>
@@ -1612,10 +1698,10 @@ function searchResults(q) {
 }
 
 /* ---------- home layout: sections you can collapse, reorder, and hide cards in ---------- */
-const CARD_LABEL = { routine: '🌅 Morning & night routine', weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
+const CARD_LABEL = { routine: '🌅 Morning & night routine', weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', school: '📚 School (Canvas)', portfolio: '🤖 StockBot portfolio', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
   moneySum: '💳 Money summary', pay: '💵 Pay estimate', spend: '💸 Spending', bills: '🧾 Bills', stocks: '📈 Watchlist', nba: '🏀 NBA', anime: '📺 Anime', links: '🔗 Quick links', tools: '⏱️ Focus & water', countdowns: '⏳ Countdowns' };
-const SECTIONS = [['top', '', ['routine', 'weather']], ['work', 'Work', ['work', 'week']], ['today', 'Today', ['today', 'tasks', 'habits', 'agenda', 'mood']],
-  ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'stocks']], ['fun', 'For fun', ['nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']]];
+const SECTIONS = [['top', '', ['routine', 'weather']], ['work', 'Work', ['work', 'week']], ['today', 'Today', ['today', 'tasks', 'school', 'habits', 'agenda', 'mood']],
+  ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'portfolio', 'stocks']], ['fun', 'For fun', ['nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']]];
 // Pay, spending, bills and stocks live in the Money tab, so home shows a one-card summary by default.
 const LAYOUT_DEFAULT = () => ({ v: 2, sections: [], hidden: ['pay', 'spend', 'bills', 'stocks'], collapsed: [] });
 function layout() { if (!S.layout || S.layout.v !== 2) { S.layout = LAYOUT_DEFAULT(); resnap('layout'); } return S.layout; }
@@ -1934,7 +2020,15 @@ function viewSettings() {
     ${row('🏀', 'NBA scores', `<span class="toggle" style="margin-left:auto"><input type="checkbox" data-change="wNba" ${S.widgets.nba ? 'checked' : ''}><i></i></span>`)}
     ${row('⭐', 'My team', `<select class="inline-select" data-change="team"><option value="">None</option>${NBA_TEAMS.map(t => `<option ${S.team === t ? 'selected' : ''}>${t}</option>`).join('')}</select>`)}
     ${row('📺', 'Anime airing today', `<span class="toggle" style="margin-left:auto"><input type="checkbox" data-change="wAnime" ${S.widgets.anime ? 'checked' : ''}><i></i></span>`)}
+    ${row('🤖', 'StockBot portfolio', `<span class="toggle" style="margin-left:auto"><input type="checkbox" data-change="wPortfolio" ${S.widgets.portfolio ? 'checked' : ''}><i></i></span>`)}
     ${row('📈', 'Stocks', `<input class="inline" data-change="stocks" value="${esc(S.stocks || '')}" placeholder="SPY, AAPL" autocapitalize="characters" autocorrect="off" spellcheck="false">`)}
+  </div>
+
+  <div class="settings-label">School</div>
+  <div class="list">
+    ${row('📚', 'Canvas', `<span class="v">${!S.canvasUrl ? 'Not connected' : CNV.error ? 'Link not working' : CNV.ts ? `${canvasItems().length} coming up` : 'Connecting…'}</span>`)}
+    <div class="pad" style="padding-bottom:8px"><input class="input" data-change="canvasUrl" value="${esc(S.canvasUrl || '')}" placeholder="Paste your Canvas calendar feed link" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div class="muted" style="font-size:13px;margin-top:8px">In Canvas, open <b>Calendar</b>, then tap <b>Calendar Feed</b> (bottom right on the web) and copy the link. Your assignments show up on Home, and one tap turns them into School tasks. The link stays private to you.</div></div>
   </div>
 
   <div class="settings-label">Work schedule</div>
@@ -2438,6 +2532,16 @@ const A = {
   },
 
   toggleTask: el => toggleTask(el.dataset.id),
+  canvasAdd: el => {
+    const x = canvasItems().find(y => y.uid === el.dataset.uid); if (!x) return;
+    const had = (S.canvasAdded || {})[x.uid];
+    if (had) { const t = byId('tasks', had); if (t) { S.tasks = S.tasks.filter(y => y !== t); tombstone(t.id); } S.canvasAdded = { ...S.canvasAdded }; delete S.canvasAdded[x.uid]; save(); render(); return toast('Removed from tasks'); }
+    canvasToTask(x); save(); hapt(); render(); toast('Added to your School tasks');
+  },
+  canvasAll: () => {
+    const n = canvasItems().filter(canvasToTask).length; save(); hapt(); render();
+    toast(`Added ${n} assignment${n === 1 ? '' : 's'} to tasks`);
+  },
   moveOverdue: () => {
     const t = dkey(), late = S.tasks.filter(x => !x.done && x.due && x.due < t), was = late.map(x => [x, x.due]);
     late.forEach(x => { x.due = t; }); save(); hapt(); render();
@@ -2735,6 +2839,13 @@ const CHANGES = {
   wAnime: el => { S.widgets.anime = el.checked; save(); },
   team: el => { S.team = el.value; save(); },
   stocks: el => { S.stocks = el.value; S.stocks = stockList().join(', '); el.value = S.stocks; save(); },
+  wPortfolio: el => { S.widgets = { ...S.widgets, portfolio: el.checked }; PF = {}; save(); },
+  canvasUrl: el => {
+    const v = el.value.trim();
+    if (v && !/^(https|webcal):\/\/[^/]*instructure\.com\//i.test(v)) return toast('That doesn’t look like a Canvas feed link');
+    S.canvasUrl = v; save(); CNV = {}; try { localStorage.removeItem('dash.canvas'); } catch { }
+    if (v) loadCanvas(true).then(() => S.tab === 'settings' && render()); else render();
+  },
   calUrl: el => {
     const v = el.value.trim();
     if (v && !/^(https|webcal):\/\//i.test(v)) return toast('That doesn’t look like a calendar link');

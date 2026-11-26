@@ -918,3 +918,17 @@ body::before { display: none; }                                   /* flat backgr
 #spotify .sp-ctl button { background: none; border: 0; color: var(--text); padding: 6px; display: grid; place-items: center; cursor: pointer; border-radius: 50%; }
 #spotify .sp-ctl button:active { transform: scale(.88); opacity: .7; }
 #spotify .sp-ctl .sp-play { width: 48px; height: 48px; background: var(--text); color: var(--bg); }
+
+/* ---------- v31: long toasts wrap instead of running off the screen ---------- */
+#toast { white-space: normal; width: max-content; }
+#toast > span { min-width: 0; }
+#toast button { white-space: nowrap; flex: none; }
+
+/* ---------- v31: pull to refresh ---------- */
+#ptr { position: fixed; left: 50%; top: calc(var(--st, env(safe-area-inset-top)) + 10px); z-index: 70; width: 34px; height: 34px; border-radius: 50%;
+  background: var(--card-solid); box-shadow: 0 4px 16px rgba(0,0,0,.25); display: grid; place-items: center; opacity: 0; pointer-events: none;
+  transform: translate(-50%, -44px); transition: transform .25s cubic-bezier(.2,.8,.2,1), opacity .2s; }
+#ptr i { width: 16px; height: 16px; border-radius: 50%; border: 2.5px solid var(--accent); border-top-color: transparent; }
+#ptr.spin i { animation: ptrSpin .7s linear infinite; }
+@keyframes ptrSpin { to { transform: rotate(360deg); } }
+#ptr.drag { transition: opacity .2s; }

@@ -214,7 +214,7 @@ function merge(local, remote) {
 function markDirty() {
   queueReminders();
   if (!SY.vault) return;
-  SY.dirty = true; saveSY();
+  SY.dirty = true; SY.gen = (SY.gen || 0) + 1; saveSY();
   clearTimeout(pushTimer); pushTimer = setTimeout(syncNow, 1500);
 }
 function setSyncStatus(s) {
@@ -246,15 +246,17 @@ async function syncNow() {
         SY.rev = remote.rev; persist(); changed = true;
       }
       if (SY.dirty || !remote) {
+        const gen = SY.gen;
         const [res] = await rpc('dash_push', { vault: SY.vault, payload: payload(), base_rev: remote ? remote.rev : 0 });
         if (!res.ok) continue; // someone else wrote in between → pull, merge, retry
-        SY.rev = res.rev; SY.dirty = false;
+        SY.rev = res.rev; if (SY.gen === gen) SY.dirty = false; else syncAgain = true;
       }
       SY.last = Date.now(); saveSY();
       if (changed) softRender();
       setSyncStatus('ok');
       break;
     }
+    if (syncStatus === 'syncing') setSyncStatus('error');
   } catch { setSyncStatus('error'); }
   syncBusy = false;
   if (syncAgain) { syncAgain = false; syncNow(); }
@@ -457,7 +459,8 @@ async function enablePush() {
 async function disablePush() {
   const ep = pushHere();
   try { const reg = await navigator.serviceWorker.ready, sub = await reg.pushManager.getSubscription(); if (sub) await sub.unsubscribe(); } catch { }
-  try { if (ep) await pushCall({ action: 'unsubscribe', endpoint: ep }); localStorage.removeItem('dash.push'); } catch { }
+  try { if (ep) await pushCall({ action: 'unsubscribe', endpoint: ep }); } catch { }
+  localStorage.removeItem('dash.push');
   render(); toast('Notifications off on this device');
 }
 
@@ -674,7 +677,7 @@ const routineNow = () => { const h = new Date().getHours(); return h >= 4 && h <
 function routineRows(w) {
   const k = dkey();
   return routineList(w).sort((a, b) => hDone(a, k) - hDone(b, k) || byWhen(a, b)).map(h => `<button class="rt-row ${hDone(h, k) ? 'on' : ''}" data-a="toggleHabit" data-id="${h.id}" data-day="${k}">
-    <span class="e">${h.emoji}</span><span class="n">${esc(h.name)}${hTarget(h) > 1 ? ` <small>${hCount(h, k)}/${hTarget(h)}</small>` : ''}</span><i class="rt-check">${I.check}</i></button>`).join('');
+    <span class="e">${esc(h.emoji)}</span><span class="n">${esc(h.name)}${hTarget(h) > 1 ? ` <small>${hCount(h, k)}/${hTarget(h)}</small>` : ''}</span><i class="rt-check">${I.check}</i></button>`).join('');
 }
 function routineCard() {
   const w = routineNow(); if (!w) return '';
@@ -691,7 +694,7 @@ function routineSheet(w) {
   openSheet(`<div class="sheet-head"><div class="sheet-title" style="margin:0">${ic} ${name}</div><div class="spacer"></div><button class="ghost" data-a="closeSheet">Done</button></div>
     <div class="rt-list" id="rt-sheet" data-w="${w}">${routineRows(w)}</div>
     <button class="btn rt-all" data-a="routineAll" data-w="${w}">✓ Did it all</button>
-    ${extra.length ? `<label class="label">Also left today</label><div class="chip-row">${extra.map(h => `<button class="habit-chip" data-a="toggleHabit" data-id="${h.id}" data-day="${k}"><span>${h.emoji}</span>${esc(h.name)}</button>`).join('')}</div>` : ''}
+    ${extra.length ? `<label class="label">Also left today</label><div class="chip-row">${extra.map(h => `<button class="habit-chip" data-a="toggleHabit" data-id="${h.id}" data-day="${k}"><span>${esc(h.emoji)}</span>${esc(h.name)}</button>`).join('')}</div>` : ''}
     <p class="muted" style="font-size:13px;margin-top:14px">Not doing one today? Open it from the Habits tab and tap Skip today — your streak stays.</p>`);
 }
 // Notifications and home-screen links open straight to what they're about.
@@ -761,7 +764,7 @@ function weatherCard() {
       <div class="w-cta"><button data-a="useLocation">Use my location</button><button data-a="goSettings">Search a city</button></div>
     </section>`;
   const d = W.sig === locSig() ? W.data : null;
-  if (!d) return `<section class="card weather w-empty" id="weather"><div class="w-loc">${I.loc} ${esc(S.location.name)}</div>
+  if (!d) return `<section class="card weather w-empty" id="weather" data-a="refreshWeather" style="cursor:pointer"><div class="w-loc">${I.loc} ${esc(S.location.name)}</div>
     <div class="w-temp">--°</div><div class="w-cond">${wLoading ? 'Loading…' : 'Tap to retry'}</div>${wLoading ? '<div class="w-loading"></div>' : ''}</section>`;
   const c = d.current, w = wmo(c.weather_code, c.is_day);
   const kind = !c.is_day && (w.kind === 'clear' || w.kind === 'cloud') ? 'night' : w.kind;
@@ -1158,7 +1161,7 @@ const calPayday = () => { const e = (CAL.url === calSrc() && CAL.events || []).f
 function nextPayday() {
   const anchor = S.payday || S.paydaySeen || '';
   if (!anchor) return null;
-  const a = parseKey(anchor), n = Math.max(0, Math.ceil(dayDiff(a, new Date()) / 14));
+  const a = parseKey(anchor), n = Math.ceil(dayDiff(a, new Date()) / 14);
   return addDays(a, n * 14);
 }
 function hourlyAt(t) {
@@ -1240,7 +1243,7 @@ function workCard() {
   }
   if ((on || soon) && n.end) { const w = hourlyAt(n.end); if (w) tips.push(`<span class="tip">${w.icon} <b>${w.temp}°</b> heading home${w.rain >= 30 ? ` · ${w.rain}% rain` : ''}</span>`); }
   // On shift: when you'd reach each place if you walk out right at the end.
-  if (on && n.end) for (const x of allPlaces()) if (x.mins) tips.push(`<span class="tip">${x.icon} ${esc(x.name)} by <b>${tm(n.end + x.mins * 6e4)}</b></span>`);
+  if (on && n.end) for (const x of allPlaces()) if (x.mins) tips.push(`<span class="tip">${esc(x.icon)} ${esc(x.name)} by <b>${tm(n.end + x.mins * 6e4)}</b></span>`);
   const tmrKey = dkey(addDays(new Date(), 1)), early = all.find(e => !e.allDay && dkey(new Date(e.start)) === tmrKey && new Date(e.start).getHours() < 12);
   if (early) tips.push(`<span class="tip">😴 Bed by <b>${tm(early.start - ((S.commute || 0) + 45) * 6e4 - 8 * 36e5)}</b> for tomorrow’s ${tm(early.start)}</span>`);
   const off = Array.from({ length: 14 }, (_, i) => addDays(new Date(), i)).find(d => !all.some(e => dkey(new Date(e.start)) === dkey(d)));
@@ -1259,7 +1262,7 @@ function workCard() {
       ${on ? `<div class="progress" style="margin:12px 0 0"><i style="width:${Math.round(Math.min(100, (now - n.start) / (n.end - n.start) * 100))}%"></i></div>` : ''}
     </div>
     ${tips.length ? `<div class="tips">${tips.join('')}</div>` : ''}
-    ${soon && (allPlaces().length > 1 || mapsUrl()) ? `<div class="from"><small>Leaving from</small><div class="chip-row" style="margin-top:6px">${allPlaces().map(x => `<button class="habit-chip ${x.id === fromPlace().id ? 'on' : ''}" data-a="setFrom" data-id="${x.id}">${x.icon} ${esc(x.name)}${x.mins ? ` · ${tm(leaveAt(n.start, x))}` : ''}</button>`).join('')}${mapsUrl() ? `<a class="habit-chip" href="${esc(mapsUrl())}" target="_blank" rel="noopener">🧭 Directions</a>` : ''}</div></div>` : ''}
+    ${soon && (allPlaces().length > 1 || mapsUrl()) ? `<div class="from"><small>Leaving from</small><div class="chip-row" style="margin-top:6px">${allPlaces().map(x => `<button class="habit-chip ${x.id === fromPlace().id ? 'on' : ''}" data-a="setFrom" data-id="${x.id}">${esc(x.icon)} ${esc(x.name)}${x.mins ? ` · ${tm(leaveAt(n.start, x))}` : ''}</button>`).join('')}${mapsUrl() ? `<a class="habit-chip" href="${esc(mapsUrl())}" target="_blank" rel="noopener">🧭 Directions</a>` : ''}</div></div>` : ''}
     ${showKit ? `<div class="kit"><small>${done.length >= kit.length ? 'Ready to go ✓' : 'Before you go'}</small><div class="chip-row" style="margin-top:6px">${kit.map(k => `<button class="habit-chip ${done.includes(k) ? 'on' : ''}" data-a="kitToggle" data-v="${esc(k)}">${done.includes(k) ? '✓ ' : ''}${esc(k)}</button>`).join('')}</div></div>` : ''}
     ${shown.length ? `<div class="shift-list">${shown.map(e => `<div class="shift-row" ${e.manual ? `data-a="editShift" data-id="${e.id}" style="cursor:pointer"` : calOn ? `data-a="openCal" data-k="${dkey(new Date(e.start))}" style="cursor:pointer"` : ''}><b>${dayName(e.start)}${e.manual ? ' ✎' : ''}</b><span>${range(e)}</span><span class="muted">${e.allDay || !e.end ? esc(e.title || '') : dur(e.end - e.start)}</span></div>`).join('')}</div>` : ''}
     ${rest.length > shown.length ? `<button class="link-btn more" data-a="openCal" data-k="${dkey(new Date(rest[shown.length].start))}">${rest.length - shown.length} more in the calendar ›</button>` : ''}
@@ -1427,7 +1430,7 @@ function billDue(b) {
   const now = new Date(), ym = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
   const on = (y, m) => new Date(y, m, Math.min(b.day, new Date(y, m + 1, 0).getDate()));
   let d = on(now.getFullYear(), now.getMonth());
-  if ((S.billPaid || {})[b.id] === ym(d)) d = on(now.getFullYear(), now.getMonth() + 1);
+  for (let i = 1; i <= 12 && ((S.billPaid || {})[b.id] || '') >= ym(d); i++) d = on(now.getFullYear(), now.getMonth() + i);
   return { date: d, ym: ym(d), days: dayDiff(now, d) };
 }
 function billsCard() {
@@ -1523,6 +1526,41 @@ function toggleTask(id) {
 
 /* ---------- swipe rows: right = complete, left = delete ---------- */
 let sw = null, swipeEndedAt = 0;
+// Pull down at the top of Home to refresh everything: weather, shifts, stocks, StockBot, Spotify, scores, sync.
+let ptr = null;
+async function refreshAll() {
+  PF.ts = 0; ANI.day = ''; CAL.ts = 0;
+  await Promise.allSettled([loadWeather(true), loadNBA(true), loadAnime(), loadPortfolio(), loadSpotify(true), loadCal(true), loadStocks(true), syncNow()]);
+  softRender();
+}
+document.addEventListener('touchstart', e => {
+  ptr = S.tab === 'home' && scrollY <= 0 && !$('#sheet-root').innerHTML && !e.target.closest('.swipe, #cal-g, input, textarea, select')
+    ? { y: e.touches[0].clientY, x: e.touches[0].clientX, d: 0 } : null;
+}, { passive: true });
+document.addEventListener('touchmove', e => {
+  if (!ptr || ptr.busy) return;
+  const dy = e.touches[0].clientY - ptr.y, dx = Math.abs(e.touches[0].clientX - ptr.x);
+  if (dy <= 0 || dx > dy || scrollY > 0) { ptr.d = 0; return ptrDraw(0); }
+  ptr.d = Math.min(120, dy * 0.5);
+  if ((ptr.d >= 70) !== !!ptr.armed) { ptr.armed = ptr.d >= 70; if (ptr.armed) hapt(8); }
+  ptrDraw(ptr.d).classList.add('drag');
+}, { passive: true });
+document.addEventListener('touchend', async () => {
+  const p = ptr; ptr = null; if (!p || !p.d) return;
+  $('#ptr')?.classList.remove('drag');
+  if (!p.armed) return ptrDraw(0);
+  const el = ptrDraw(56); el.classList.add('spin');
+  const t0 = Date.now();
+  try { await refreshAll(); } catch { }
+  setTimeout(() => { el.classList.remove('spin'); ptrDraw(0); }, Math.max(0, 600 - (Date.now() - t0)));
+});
+function ptrDraw(d) {
+  let el = $('#ptr');
+  if (!el) { el = document.createElement('div'); el.id = 'ptr'; el.setAttribute('aria-hidden', 'true'); el.innerHTML = '<i></i>'; document.body.appendChild(el); }
+  el.style.transform = `translate(-50%, ${d - 44}px) rotate(${d * 3}deg)`;
+  el.style.opacity = Math.min(1, d / 50);
+  return el;
+}
 document.addEventListener('touchstart', e => {
   const row = e.target.closest('.swipe');
   sw = row && !e.target.closest('.check') ? { row, x: e.touches[0].clientX, y: e.touches[0].clientY, dx: 0, lock: null } : null;
@@ -1616,7 +1654,7 @@ function viewHome() {
   </section>`,
     habits: () => dueH.length ? `<section class="card">
     ${secHead('Habits', `<button class="link-btn" data-a="tab" data-tab="habits">${nDone}/${dueH.length}</button>`)}
-    <div class="chip-row">${[...dueH].sort((a, b) => hDone(a, t) - hDone(b, t) || byWhen(a, b)).map(x => `<button class="habit-chip ${hDone(x, t) ? 'on' : ''}" data-a="toggleHabit" data-id="${x.id}" data-day="${t}"><span>${x.emoji}</span>${esc(x.name)}${hTarget(x) > 1 ? `<small>${hCount(x, t)}/${hTarget(x)}</small>` : ''}</button>`).join('')}</div>
+    <div class="chip-row">${[...dueH].sort((a, b) => hDone(a, t) - hDone(b, t) || byWhen(a, b)).map(x => `<button class="habit-chip ${hDone(x, t) ? 'on' : ''}" data-a="toggleHabit" data-id="${x.id}" data-day="${t}"><span>${esc(x.emoji)}</span>${esc(x.name)}${hTarget(x) > 1 ? `<small>${hCount(x, t)}/${hTarget(x)}</small>` : ''}</button>`).join('')}</div>
   </section>` : '',
     links: () => `<section class="card">
     ${secHead('Quick links', `<button class="link-btn" data-a="goSettings">Edit</button>`)}
@@ -1648,7 +1686,7 @@ function viewHome() {
     ${secHead('Countdowns')}
     <div class="cd-row">
       ${cds.map(c => { const n = dayDiff(new Date(), parseKey(c.next)); return `<button class="cd ${n <= 7 && n >= 0 ? 'soon' : ''}" data-a="editCountdown" data-id="${c.id}">
-        <span class="e">${c.emoji}</span>
+        <span class="e">${esc(c.emoji)}</span>
         <span class="n">${n === 0 ? 'Today' : Math.abs(n)}${n === 0 ? '' : `<small>${n < 0 ? 'days ago' : n === 1 ? 'day' : 'days'}</small>`}</span>
         <span class="t">${esc(c.title)}</span><span class="d">${fmtDate(c.next, { month: 'short', day: 'numeric', year: 'numeric' })}</span></button>`; }).join('')}
       <button class="cd add" data-a="addCountdown" aria-label="Add countdown">${I.plus}</button>
@@ -1659,7 +1697,7 @@ function viewHome() {
   const L = layout(), hidden = new Set(L.hidden), shut = new Set(L.collapsed);
   const body = sectionOrder().map(([id, title, cards]) => {
     const html = cards.filter(c => !hidden.has(c) && P[c]).map(c => P[c]()).filter(x => x && !/^<span id="week" hidden>/.test(x)).join('\n');
-    if (!html) return '';
+    if (!html || !/<(section|div|a|button)\b/.test(html)) return html;
     if (!title) return html;
     return `<button class="sec-toggle ${shut.has(id) ? 'shut' : ''}" data-a="secToggle" data-id="${id}"><span>${title}</span>${I.chev}</button>${shut.has(id) ? '' : html}`;
   }).join('\n');
@@ -1735,7 +1773,7 @@ function searchResults(q) {
   (S.bills || []).filter(b => hit(b.name)).forEach(b => rows.push(['editBill', b.id, b.emoji || '🧾', b.name, 'Bill']));
   S.countdowns.filter(c => hit(c.title)).forEach(c => rows.push(['editCountdown', c.id, c.emoji, c.title, 'Countdown']));
   S.links.filter(l => hit(l.title) || hit(l.url)).forEach(l => rows.push(['editLink', l.id, l.emoji || '🔗', l.title, 'Link']));
-  return rows.length ? `<div class="list" style="box-shadow:none">${rows.map(([a, id, ic, t, sub]) => `<button class="row" data-a="${a}" data-id="${id}"><span class="ic">${ic}</span><span class="row-title" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t)}</span><span class="v">${esc(sub)}</span></button>`).join('')}</div>` : '<div class="muted">Nothing found.</div>';
+  return rows.length ? `<div class="list" style="box-shadow:none">${rows.map(([a, id, ic, t, sub]) => `<button class="row" data-a="${a}" data-id="${id}"><span class="ic">${esc(ic)}</span><span class="row-title" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t)}</span><span class="v">${esc(sub)}</span></button>`).join('')}</div>` : '<div class="muted">Nothing found.</div>';
 }
 
 /* ---------- home layout: sections you can collapse, reorder, and hide cards in ---------- */
@@ -1787,7 +1825,7 @@ function agendaCard() {
   if (!rows.length) return '';
   return `<section class="card" id="agenda">${secHead('📅 Coming up', `<button class="link-btn" data-a="openCal">Calendar ›</button>`)}
     <div class="stock-list">${rows.slice(0, 6).map(e => { const n = dayDiff(new Date(), new Date(e.start)); return `<div class="stock">
-      <span style="font-size:22px">${e.icon}</span><div><b style="font-size:15px">${esc(e.title)}</b><small>${new Date(e.start).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}${e.allDay || e.icon === '💵' ? '' : ' · ' + tm(e.start)}</small></div>
+      <span style="font-size:22px">${esc(e.icon)}</span><div><b style="font-size:15px">${esc(e.title)}</b><small>${new Date(e.start).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}${e.allDay || e.icon === '💵' ? '' : ' · ' + tm(e.start)}</small></div>
       <span class="pill ${n <= 1 ? 'live' : ''}">${n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : `in ${n}d`}</span></div>`; }).join('')}</div>
   </section>`;
 }
@@ -1825,7 +1863,7 @@ function budgetSheet() {
   openSheet(`<form data-form="budgets" autocomplete="off">
     <div class="sheet-title">Monthly budgets</div>
     <p class="muted" style="font-size:13px;margin-bottom:6px">Leave a category empty for no limit.</p>
-    <div class="list" style="box-shadow:none">${SPEND_CATS.map(([c, ic]) => `<label class="row"><span class="ic">${ic}</span><span class="row-title">${c}</span>
+    <div class="list" style="box-shadow:none">${SPEND_CATS.map(([c, ic]) => `<label class="row"><span class="ic">${esc(ic)}</span><span class="row-title">${c}</span>
       <input class="inline num" type="number" inputmode="decimal" min="0" step="1" name="${c}" value="${B[c] || ''}" placeholder="$" style="width:90px"></label>`).join('')}</div>
     <div class="btn-row"><button class="btn">Save budgets</button></div></form>`);
 }
@@ -1935,7 +1973,7 @@ function viewHabits() {
     const s = streak(h), tg = hTarget(h), c = hCount(h, tk), done = c >= tg;
     return `<section class="card habit ${done ? 'is-done' : ''}">
       <div class="habit-top">
-        <button class="habit-emoji" data-a="habitDetail" data-id="${h.id}" aria-label="Details">${h.emoji}</button>
+        <button class="habit-emoji" data-a="habitDetail" data-id="${h.id}" aria-label="Details">${esc(h.emoji)}</button>
         <div class="habit-info" data-a="habitDetail" data-id="${h.id}"><div class="habit-name">${esc(h.name)}</div>
           <div class="habit-sub">${isWeekly(h) ? `<b class="wk-goal ${weekMet(h) ? 'met' : ''}">${weekDone(h)}/${weekGoal(h)} this week</b> ` : ''}${[s ? `🔥 ${s} ${isWeekly(h) ? 'wk' : 'day'}${s === 1 ? '' : 's'}` : '', strength(h) ? `💪 ${strength(h)}%` : '', h.remind ? `🔔 ${tm(atTime(tk, h.remind))}` : ''].filter(Boolean).join(' · ') || (isWeekly(h) ? '' : 'Not started yet')}</div></div>
         <button class="habit-go ${done ? 'on' : ''}" data-a="toggleHabit" data-id="${h.id}" data-day="${tk}" aria-label="${done ? 'Undo' : 'Mark done'}">${done ? I.check : tg > 1 ? `<b>${c}/${tg}</b>` : I.check}</button>
@@ -1950,7 +1988,7 @@ function viewHabits() {
   const groups = Object.entries(WHEN).map(([k, [label, icon]]) => group(`${icon} ${label}`, daily.filter(h => (h.when || 'any') === k))
       + (ROUT[k] && daily.some(h => (h.when || 'any') === k && !hDone(h, tk)) ? `<button class="chip rt-mini" data-a="routineAll" data-w="${k}">✓ Mark all ${label.toLowerCase()} done</button>` : '')).join('')
     + group('📆 Weekly goals', dueT.filter(isWeekly))
-    + (notToday.length ? `<div class="group-label">😌 Not today</div><div class="chip-row" style="margin-top:0">${notToday.map(h => `<button class="habit-chip" data-a="habitDetail" data-id="${h.id}"><span>${h.emoji}</span>${esc(h.name)}<small>${hSkip(h, tk) ? 'skipped' : HDAYS[h.days || ''].toLowerCase()}</small></button>`).join('')}</div>` : '');
+    + (notToday.length ? `<div class="group-label">😌 Not today</div><div class="chip-row" style="margin-top:0">${notToday.map(h => `<button class="habit-chip" data-a="habitDetail" data-id="${h.id}"><span>${esc(h.emoji)}</span>${esc(h.name)}<small>${hSkip(h, tk) ? 'skipped' : HDAYS[h.days || ''].toLowerCase()}</small></button>`).join('')}</div>` : '');
   const have = new Set(S.habits.map(h => h.name.toLowerCase()));
   const ideas = HABIT_IDEAS.map((x, i) => [x, i]).filter(([x]) => !have.has(x[1].toLowerCase()));
   return `
@@ -1988,7 +2026,7 @@ function viewNotes() {
 }
 
 function viewSettings() {
-  const row = (ic, title, right, a = '', attrs = '') => `<${a ? 'button' : 'div'} class="row" ${a ? `data-a="${a}"` : ''} ${attrs}><span class="ic">${ic}</span><span class="row-title">${title}</span>${right}</${a ? 'button' : 'div'}>`;
+  const row = (ic, title, right, a = '', attrs = '') => `<${a ? 'button' : 'div'} class="row" ${a ? `data-a="${a}"` : ''} ${attrs}><span class="ic">${esc(ic)}</span><span class="row-title">${title}</span>${right}</${a ? 'button' : 'div'}>`;
   return `
   <header class="page-head"><button class="icon-btn" data-a="tab" data-tab="home" aria-label="Back" style="transform:scaleX(-1)">${I.chev}</button><h1>Settings</h1></header>
 
@@ -2210,7 +2248,7 @@ function renderTabs() {
 }
 function go(tab) {
   if (S.tab === tab) return scrollTo({ top: 0, behavior: 'smooth' });
-  S.tab = tab; save(); render('tab');
+  S.tab = tab; persist(); render('tab');
 }
 
 /* =========================================================
@@ -2332,7 +2370,7 @@ function habitDetail(h) {
   const start = addDays(end, -((weeks - 1) * 7 + end.getDay()));
   const cells = []; for (let d = start; dkey(d) <= dkey(end); d = addDays(d, 1)) { const k = dkey(d); cells.push(`<i class="${hDone(h, k) ? 'on' : hCount(h, k) ? 'part' : ''} ${k === dkey() ? 't' : ''}" title="${k}"></i>`); }
   openSheet(`
-    <div class="habit-top" style="margin-bottom:16px"><div class="habit-emoji" style="width:52px;height:52px;font-size:26px">${h.emoji}</div>
+    <div class="habit-top" style="margin-bottom:16px"><div class="habit-emoji" style="width:52px;height:52px;font-size:26px">${esc(h.emoji)}</div>
       <div><div class="sheet-title" style="margin:0">${esc(h.name)}</div><div class="habit-sub">${isWeekly(h) ? `${weekGoal(h)}× a week · ` : h.days ? HDAYS[h.days] + ' · ' : ''}Since ${Object.keys(h.log).filter(k => hCount(h, k)).sort()[0] ? fmtDate(Object.keys(h.log).filter(k => hCount(h, k)).sort()[0]) : 'today'} · best ${bestStreak(h)}${isWeekly(h) ? ' wk' : ''}</div></div></div>
     <div class="stat-grid">
       <div class="stat"><small>Strength</small><b>${strength(h)}%</b></div>
@@ -2583,7 +2621,7 @@ const A = {
   },
   editTask: el => taskSheet(byId('tasks', el.dataset.id)),
   deleteTask: el => removeWithUndo('tasks', el.dataset.id, 'Task'),
-  taskFilter: el => { S.taskFilter = el.dataset.f; save(); render(); },
+  taskFilter: el => { S.taskFilter = el.dataset.f; persist(); render(); },
   clearDone: () => {
     const before = S.tasks, gone = S.tasks.filter(x => x.done);
     gone.forEach(x => tombstone(x.id)); S.tasks = S.tasks.filter(x => !x.done); save(); render();
@@ -2696,6 +2734,11 @@ const A = {
     const was = SP.playing; SP.pos = spPos(); SP.at = Date.now(); SP.playing = !was;
     const el = $('#spotify'); if (el) el.outerHTML = spotifyCard();
     spCtl(was ? 'pause' : 'play', 'PUT');
+  },
+  syncNow: () => { toast('Syncing…'); syncNow(); },
+  shareCode: async () => {
+    try { await navigator.clipboard.writeText(SY.vault); toast('Code copied. On the other device: Settings → Cloud sync → paste it.'); }
+    catch { prompt('Your sync code. Paste it on the other device in Settings → Cloud sync:', SY.vault); }
   },
   copyVal: async el => { try { await navigator.clipboard.writeText(el.dataset.v); toast('Copied'); } catch { prompt('Copy this:', el.dataset.v); } },
   updateShifts: async () => {
@@ -2914,7 +2957,7 @@ document.addEventListener('change', e => {
       const j = JSON.parse(txt), data = j.data || j;
       if (!Array.isArray(data.tasks) || !Array.isArray(data.habits)) throw new Error('bad');
       if (!confirm('Replace everything on this device with this backup?')) return;
-      const d = DEFAULTS(); S = { ...d, ...data, focus: { ...d.focus, ...data.focus } }; SNAP = { keys: {}, items: {} }; save(); applyTheme(); render(true); toast('Backup restored');
+      const d = DEFAULTS(); S = { ...d, ...data, focus: { ...d.focus, ...data.focus }, widgets: { ...d.widgets, ...data.widgets }, notify: { ...d.notify, ...data.notify } }; SNAP = { keys: {}, items: {} }; save(); applyTheme(); render(true); toast('Backup restored');
     }).catch(() => toast('That file isn’t a Dash backup'));
     e.target.value = '';
   }

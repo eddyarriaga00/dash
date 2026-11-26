@@ -722,3 +722,4 @@ i.d-event { background: #5ac8fa !important; } i.d-task { background: var(--dange
 .routine.done { padding-top: 14px; padding-bottom: 14px; }
 .rt-done { display: flex; align-items: center; justify-content: space-between; font-weight: 650; }
 .rt-mini { margin: 8px 0 4px; font-size: 13px; }
+i.d-off { background: var(--faint) !important; }

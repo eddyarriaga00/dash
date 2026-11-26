@@ -936,7 +936,9 @@ const tshort = t => { const d = new Date(t), h = d.getHours(), m = d.getMinutes(
 const dur = ms => { const h = ms / 36e5; return h >= 1 ? `${+h.toFixed(1)}h` : `${Math.round(ms / 6e4)}m`; };
 const money = n => '$' + Math.round(n).toLocaleString();
 // Shifts entered by hand (for ones the calendar feed doesn't have). Times are local, e.g. "2026-11-19T11:00".
-const manualShifts = () => (S.xShifts || []).map(x => ({ id: x.id, manual: true, title: 'Added by hand', start: new Date(x.start).getTime(), end: new Date(x.end).getTime(), allDay: false }))
+// Days you called off (S.calledOff[day] = true): no shift, no pay, no leave reminder, and day-off habits come back.
+const isOff = t => !!(S.calledOff && S.calledOff[dkey(new Date(t))]);
+const manualShifts = () => (S.xShifts || []).filter(x => !isOff(Date.parse(x.start))).map(x => ({ id: x.id, manual: true, title: 'Added by hand', start: new Date(x.start).getTime(), end: new Date(x.end).getTime(), allDay: false }))
   .filter(e => !isNaN(e.start) && !isNaN(e.end));
 function calShifts() {
   if (!calSrc() || CAL.url !== calSrc()) return [];
@@ -960,7 +962,7 @@ function joinSegments(list) {
 // Work shifts from today onward: the calendar's, plus hand-entered ones on days the calendar has nothing.
 function shifts() {
   const cal = calShifts(), days = new Set(cal.filter(e => !e.allDay).map(e => dkey(new Date(e.start)))), from = parseKey(dkey()).getTime();
-  return [...cal, ...manualShifts().filter(e => e.end >= from && !days.has(dkey(new Date(e.start))))].sort((x, y) => x.start - y.start);
+  return [...cal.filter(e => e.allDay || !isOff(e.start)), ...manualShifts().filter(e => e.end >= from && !days.has(dkey(new Date(e.start))))].sort((x, y) => x.start - y.start);
 }
 const unlogShift = x => { if (x && S.shiftLog) delete S.shiftLog[new Date(x.start).toISOString()]; };
 const paidHours = (start, end) => { const h = (end - start) / 36e5; return Math.max(0, h - (h >= 6 ? (S.unpaidBreak || 0) / 60 : 0)); };
@@ -974,6 +976,7 @@ function logShifts() {
   // Hand-entered shifts on past days count too, unless that day is already logged from the calendar.
   const logged = new Set(Object.keys(log).map(k => dkey(new Date(k))));
   for (const e of manualShifts()) if (e.end < now && e.start > cutoff && !logged.has(dkey(new Date(e.start)))) log[new Date(e.start).toISOString()] = +((e.end - e.start) / 36e5).toFixed(2);
+  for (const k in log) if (isOff(Date.parse(k))) delete log[k];
   if (sig(log) !== before) { S.shiftLog = log; save(); }
 }
 // Paid hours between two times, from the log (past) and the live schedule (future).
@@ -1131,6 +1134,7 @@ function dayItems(from, to) {
     put(k, { type: 'shift', o: 1, icon: '💼', t: e.start, start: e.start, title: `${tm(e.start)} – ${tm(e.end || e.start)}`, sub: `${S.job || 'Work'} · ${dur((e.end || e.start) - e.start)}${S.rate ? ' · ' + money(paidHours(e.start, e.end || e.start) * S.rate) : ''}`, tail: `${dur((e.end || e.start) - e.start)}${S.rate ? ' · ' + money(paidHours(e.start, e.end || e.start) * S.rate) : ''}`, short: tshort(e.start), id: e.manual ? e.id : '' }); };
   shifts().filter(e => !e.allDay && inR(e.start)).forEach(addShiftItem);
   manualShifts().filter(e => inR(e.start)).forEach(addShiftItem);
+  for (const k in S.calledOff || {}) if (inR(parseKey(k).getTime())) put(k, { type: 'off', o: 1, icon: '🍼', t: 0, title: 'Called off', sub: 'Tap to undo', k });
   for (const [k, h] of Object.entries(S.shiftLog || {})) { const t = Date.parse(k); if (inR(t)) addShiftItem({ start: t, end: t + h * 36e5 }); }
   const seen = new Set();
   if (!S.calUrl && CAL.url === calSrc()) for (const e of CAL.events || []) {
@@ -1176,7 +1180,7 @@ function calBody() {
   const label = diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : diff === -1 ? 'Yesterday' : sd.toLocaleDateString(undefined, { weekday: 'long' });
   const wx = dayWx(sel), pl = fromPlace();
   const tap = x => x.type === 'shift' ? (x.id ? `data-a="editShift" data-id="${x.id}"` : '') : x.type === 'task' ? `data-a="editTask" data-id="${x.id}"` : x.type === 'bill' ? `data-a="editBill" data-id="${x.id}"`
-    : x.type === 'cd' ? `data-a="editCountdown" data-id="${x.id}"` : x.type === 'pay' ? 'data-a="openPay"' : '';
+    : x.type === 'cd' ? `data-a="editCountdown" data-id="${x.id}"` : x.type === 'pay' ? 'data-a="openPay"' : x.type === 'off' ? `data-a="undoCallOff" data-k="${x.k}"` : '';
   const row = x => { const a = tap(x), sub = x.type === 'shift' && pl.mins && x.start > now ? `Leave ${allPlaces().length > 1 ? (pl.id === 'home' ? 'home' : pl.name) + ' ' : ''}by ${tm(leaveAt(x.start))} · ${x.tail}` : x.sub;
     return `<div class="stock cal-row ${x.type === 'task' ? `p${x.prio}${x.done ? ' done' : ''}` : ''}" ${x.type === 'task' ? `data-tid="${x.id}"` : ''} ${a} ${a ? 'style="cursor:pointer"' : ''}>
         <span class="cal-ic">${x.type === 'task' ? `<button class="check" data-a="toggleTask" data-id="${x.id}" aria-label="${x.done ? 'Mark incomplete' : 'Complete'}">${I.check}</button>` : x.icon}</span>
@@ -1189,11 +1193,20 @@ function calBody() {
     <div class="cal-g" id="cal-g">${cells}</div>
     ${kinds.size ? `<div class="cal-key">${Object.keys(CAL_KEY).filter(t => kinds.has(t)).map(t => `<span><i class="d-${t}"></i>${CAL_KEY[t]}</span>`).join('')}</div>` : ''}
     <div class="cal-day"><div class="sec-head" style="margin-top:14px"><h2>${label} <span class="muted" style="font-weight:500;font-size:14px">${sd.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span></h2>
-      <span style="display:flex;gap:14px"><button class="link-btn" data-a="calAddShift">+ Shift</button><button class="link-btn" data-a="calAddTask">+ Task</button></span></div>
+      <span style="display:flex;gap:14px">${list.some(x => x.type === 'shift') ? `<button class="link-btn" data-a="callOffDay" data-k="${sel}">Called off</button>` : `<button class="link-btn" data-a="calAddShift">+ Shift</button>`}<button class="link-btn" data-a="calAddTask">+ Task</button></span></div>
       ${wx ? `<div class="cal-wx">${wx}</div>` : ''}
       ${list.length ? `<div class="stock-list">${list.map(row).join('')}</div>`
       : `<div class="muted" style="padding:6px 0 4px">Nothing on this day${diff >= 0 ? ' — a day off 🏖️' : ''}.</div>`}</div>`;
 }
+function callOff(from, to) {
+  const days = []; S.calledOff = { ...(S.calledOff || {}) };
+  for (let d = parseKey(from); dkey(d) <= to && days.length < 62; d = addDays(d, 1)) days.push(dkey(d));
+  const had = days.filter(k => workDays().has(k));
+  days.forEach(k => { S.calledOff[k] = true; });
+  const cut = Date.now() - 90 * 864e5; for (const k in S.calledOff) if (parseKey(k).getTime() < cut) delete S.calledOff[k];
+  wdCache = { t: 0, s: null }; save(); logShifts(); return had.length;
+}
+function undoCallOff(k) { if (S.calledOff) { S.calledOff = { ...S.calledOff }; delete S.calledOff[k]; } wdCache = { t: 0, s: null }; save(); logShifts(); }
 // The calendar lives on the home screen; this jumps to it on a given day.
 function calReset() { calView.sel = dkey(); calView.ym = calView.sel.slice(0, 7); }
 function calendarSheet(day) {
@@ -2209,27 +2222,34 @@ const MON_RE = '(january|february|march|april|may|june|july|august|september|oct
 // Reads a work-schedule list ("Sat / 28 / 9:30 AM-4:00 PM [6.50]") into one shift per day.
 // A day with several time ranges (segments, breaks) keeps the longest one, which is the whole shift.
 function parseSchedule(txt) {
-  const out = {}, now = new Date();
-  let y = now.getFullYear(), mo = null, last = 0, day = null, wdPending = false;
+  const out = {}, WD = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  let y = new Date().getFullYear(), mo = null, last = 0, lastDate = null, day = null, pendWd = -1;
   const hdr = txt.match(new RegExp(`\\b${MON_RE}\\s+(\\d{4})\\b`, 'i'));
   if (hdr) { mo = MONTHS.indexOf(hdr[1].toLowerCase()); y = +hdr[2]; }
   const mins = (t, ap) => { let [h, m] = t.split(/[:.]/).map(Number); if (/p/i.test(ap) && h < 12) h += 12; if (/a/i.test(ap) && h === 12) h = 0; return h * 60 + m; };
+  // The weekday printed beside each date is the check: text reading can drop or merge digits ("11" → "1"),
+  // so a date that doesn't fall on that weekday moves to the next one that does.
+  const setDay = (d, wd) => {
+    if (wd >= 0 && d.getDay() !== wd && lastDate) { d = addDays(lastDate, 1); while (d.getDay() !== wd) d = addDays(d, 1); }
+    lastDate = d; y = d.getFullYear(); mo = d.getMonth(); last = d.getDate(); day = dkey(d);
+  };
   for (let ln of txt.replace(/[–—−~]/g, '-').split(/\r?\n/)) {
     ln = ln.trim(); if (!ln) continue;
     const wk = ln.match(new RegExp(`^${MON_RE}\\s+(\\d{1,2})\\s*-`, 'i'));
     if (wk) {
       const m2 = MONTHS.indexOf(wk[1].toLowerCase());
       if (mo != null && m2 < mo && mo - m2 > 6) y++;
-      mo = m2; last = +wk[2] - 1; day = null; wdPending = false; continue;
+      mo = m2; last = +wk[2] - 1; lastDate = new Date(y, mo, last); day = null; pendWd = -1; continue;
     }
     const m = ln.match(/^(?:(sun|mon|tue|wed|thu|fri|sat)[a-z]*\.?\s*)?(?:(\d{1,2})(?![\d:.]))?/i);
-    const n = m[2] && (m[1] || wdPending) ? +m[2] : null;
-    wdPending = !!m[1] && !m[2];
-    if (n != null && n >= 1 && n <= 31 && mo != null) {
-      if (n < last - 7) { mo++; if (mo > 11) { mo = 0; y++; } }
-      last = n; day = `${y}-${pad(mo + 1)}-${pad(n)}`;
-    }
+    const w = m[1] ? WD.indexOf(m[1].slice(0, 3).toLowerCase()) : -1, wd = w >= 0 ? w : pendWd;
+    const n = m[2] && wd >= 0 ? +m[2] : null;
+    pendWd = w >= 0 && !m[2] ? w : -1;
     const r = ln.match(/(\d{1,2}[:.]\d{2})\s*([AP])\.?\s*M\.?\s*-\s*(\d{1,2}[:.]\d{2})\s*([AP])\.?\s*M/i);
+    if (n != null && n >= 1 && n <= 31 && mo != null) {
+      let mm = mo, yy = y; if (n < last - 7) { mm++; if (mm > 11) { mm = 0; yy++; } }
+      setDay(new Date(yy, mm, n), wd);
+    } else if (w < 0 && wd >= 0 && r && lastDate) setDay(addDays(lastDate, 1), wd); // the date itself didn't come through
     if (r && day) {
       const a = mins(r[1], r[2]), b = mins(r[3], r[4]), len = (b - a + 1440) % 1440;
       if (len && (!out[day] || len > out[day].len)) out[day] = { day, a, b, len };
@@ -2247,7 +2267,12 @@ function importSheet() {
     <details style="margin-top:14px"><summary class="muted" style="font-size:14px">Or paste the schedule as text</summary>
       <textarea class="input" id="imp-text" rows="6" style="margin-top:8px" placeholder="November 2026&#10;Sat 28  9:30 AM-4:00 PM"></textarea>
       <button type="button" class="btn secondary" data-a="impText" style="margin-top:8px">Read it</button></details>
-    <div id="imp-out" style="margin-top:14px"></div>`);
+    <div id="imp-out" style="margin-top:14px"></div>
+    <label class="label">Called off some days?</label>
+    <div class="grid2"><div><label class="label" style="margin-top:0">From</label><input class="input" type="date" id="off-from" value="${dkey(addDays(new Date(), -7))}"></div>
+      <div><label class="label" style="margin-top:0">Through</label><input class="input" type="date" id="off-to" value="${dkey()}"></div></div>
+    <button type="button" class="btn secondary" data-a="callOffRange" style="margin-top:10px">Mark these days as called off</button>
+    <p class="muted" style="font-size:13px;margin-top:8px">Their shifts leave your pay estimate and reminders. Undo any day from the calendar.</p>`);
 }
 const impOut = html => { const el = $('#imp-out'); if (el) el.innerHTML = html; };
 let tessP = null;
@@ -2275,10 +2300,10 @@ function showImport(texts) {
   const have = new Set(shifts().filter(e => !e.allDay).map(e => dkey(new Date(e.start))));
   IMP = Object.values(found).sort((a, b) => a.day.localeCompare(b.day));
   if (!IMP.length) return impOut(`<div class="muted">No shifts found. Make sure the screenshots show the dates and times, like “Sat 28 · 9:30 AM–4:00 PM”.</div>`);
-  const hm = v => tm(parseKey(dkey()).getTime() + v * 6e4);
+  const hm = v => tm(parseKey(dkey()).getTime() + v * 6e4), off = k => !!(S.calledOff && S.calledOff[k]);
   impOut(`<label class="label" style="margin-top:0">Found ${IMP.length} shift${IMP.length === 1 ? '' : 's'} — untick any you’re not working</label>
-    <div class="list" style="box-shadow:none">${IMP.map((x, i) => `<label class="row"><span class="row-title" style="flex:1">${parseKey(x.day).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}<small class="muted" style="display:block;font-weight:500">${hm(x.a)} – ${hm(x.b)} · ${+(x.len / 60).toFixed(2)}h${have.has(x.day) ? ' · replaces what Dash has' : ''}</small></span>
-      <span class="toggle"><input type="checkbox" data-imp="${i}" checked><i></i></span></label>`).join('')}</div>
+    <div class="list" style="box-shadow:none">${IMP.map((x, i) => `<label class="row"><span class="row-title" style="flex:1">${parseKey(x.day).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}<small class="muted" style="display:block;font-weight:500">${hm(x.a)} – ${hm(x.b)} · ${+(x.len / 60).toFixed(2)}h${off(x.day) ? ' · you called off' : have.has(x.day) ? ' · replaces what Dash has' : ''}</small></span>
+      <span class="toggle"><input type="checkbox" data-imp="${i}" ${off(x.day) ? '' : 'checked'}><i></i></span></label>`).join('')}</div>
     <div class="btn-row"><button class="btn" data-a="impSave">Add shifts</button></div>`);
 }
 function saveImport() {
@@ -2287,6 +2312,7 @@ function saveImport() {
   S.xShifts = S.xShifts || [];
   for (const x of S.xShifts.filter(x => days.has(x.start.slice(0, 10)))) unlogShift(x);
   S.xShifts = S.xShifts.filter(x => !days.has(x.start.slice(0, 10)));
+  if (S.calledOff) { S.calledOff = { ...S.calledOff }; pick.forEach(x => delete S.calledOff[x.day]); }
   for (const x of pick) S.xShifts.push({ id: uid(), start: `${x.day}T${t(x.a)}`, end: `${x.b <= x.a ? dkey(addDays(parseKey(x.day), 1)) : x.day}T${t(x.b)}` });
   save(); logShifts(); closeSheet(); render(); toast(`Added ${pick.length} shift${pick.length === 1 ? '' : 's'}`);
 }
@@ -2305,7 +2331,7 @@ function shiftSheet(x) {
     </div>
     <p class="muted" style="font-size:13px;margin-top:12px">For shifts your calendar doesn’t show yet. If the calendar later has a shift that day, Dash uses the calendar’s.</p>
     <div class="btn-row"><button class="btn">${isNew ? 'Add shift' : 'Save'}</button>
-      ${isNew ? '' : `<button type="button" class="btn danger" data-a="deleteShift" data-id="${x.id}">Delete shift</button>`}</div>
+      ${isNew ? '' : `<button type="button" class="btn secondary" data-a="callOffDay" data-k="${x.start.slice(0, 10)}" onclick="closeSheet()">Called off</button><button type="button" class="btn danger" data-a="deleteShift" data-id="${x.id}">Delete shift</button>`}</div>
   </form>`);
 }
 
@@ -2508,6 +2534,12 @@ const A = {
   delSpend: el => removeWithUndo('spend', el.dataset.id, 'Expense'),
   addShift: () => shiftSheet(),
   openImport: () => importSheet(),
+  callOffRange: () => {
+    const a = $('#off-from')?.value, b = $('#off-to')?.value; if (!a || !b || a > b) return toast('Pick a start and end date');
+    const n = callOff(a, b); closeSheet(); render(); toast(n ? `Called off ${n} shift${n === 1 ? '' : 's'}` : 'Marked as called off');
+  },
+  callOffDay: el => { const k = el.dataset.k; callOff(k, k); render(); toast('Called off', () => { undoCallOff(k); render(); }); },
+  undoCallOff: el => { undoCallOff(el.dataset.k); render(); toast('Shift is back on'); },
   impText: () => showImport([$('#imp-text')?.value || '']),
   impSave: () => saveImport(),
   editShift: el => shiftSheet(byId('xShifts', el.dataset.id)),

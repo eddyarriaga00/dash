@@ -152,12 +152,17 @@ function adopt(data) {
    instead of whichever device happens to be syncing. save() works these out by comparing against
    a snapshot of the last saved state, so nothing else in the app has to think about it. */
 const LISTS = ['tasks', 'habits', 'notes', 'links', 'countdowns', 'bills', 'xShifts', 'spend', 'places'];
-const UNCLOCKED = new Set([...LOCAL_ONLY, ...LISTS, '_m', '_deleted', 'moods', 'shiftLog', 'billPaid', 'focus']);
+const MAPS = ['moods', 'shiftLog', 'billPaid'];
+const UNCLOCKED = new Set([...LOCAL_ONLY, ...LISTS, '_m', '_mk', '_deleted', ...MAPS, 'focus']);
+// The maps (mood per day, paid month per bill, hours per shift) keep a clock per entry in S._mk, so a
+// removed entry stays removed after a merge instead of coming back from the other device.
+const mapSig = o => Object.fromEntries(Object.entries(o || {}).map(([k, v]) => [k, JSON.stringify(v)]));
 const itemSig = x => { const { u, ...rest } = x; return JSON.stringify(rest); };
 let SNAP = { keys: {}, items: {} };
 function snapshot() {
-  SNAP = { keys: {}, items: {} };
+  SNAP = { keys: {}, items: {}, maps: {} };
   for (const k of Object.keys(S)) if (!UNCLOCKED.has(k)) SNAP.keys[k] = JSON.stringify(S[k]);
+  for (const k of MAPS) SNAP.maps[k] = mapSig(S[k]);
   for (const l of LISTS) for (const x of S[l] || []) SNAP.items[x.id] = itemSig(x);
 }
 // For changes the app makes on its own (a new day's reset, a default layout): not an edit, so no clock tick.
@@ -174,6 +179,14 @@ function stamp() {
     items[x.id] = j;
   }
   SNAP.items = items;
+  const mk = S._mk = S._mk || {}, cut = now - 120 * 864e5;
+  SNAP.maps = SNAP.maps || {};
+  for (const k of MAPS) {
+    const was = SNAP.maps[k] || {}, cur = mapSig(S[k]), c = mk[k] = mk[k] || {};
+    for (const e of new Set([...Object.keys(was), ...Object.keys(cur)])) if (was[e] !== cur[e]) c[e] = now;
+    for (const e in c) if (c[e] < cut) delete c[e];
+    SNAP.maps[k] = cur;
+  }
 }
 snapshot();
 // Merge for when both sides changed: lists are joined by id, the newer edit of anything wins
@@ -203,9 +216,17 @@ function merge(local, remote) {
     for (const r of remote[k] || []) if (!seen.has(r.id)) list.push(r);
     out[k] = list.filter(x => !(dead[x.id] && dead[x.id] >= (x.u || 0)));
   }
-  out.moods = { ...(remote.moods || {}), ...(local.moods || {}) };
-  out.shiftLog = { ...(remote.shiftLog || {}), ...(local.shiftLog || {}) };
-  out.billPaid = { ...(remote.billPaid || {}), ...(local.billPaid || {}) };
+  // Per entry, the side that changed it last wins, including when that change was removing it.
+  const lk = local._mk || {}, rk = remote._mk || {}; out._mk = {};
+  for (const k of MAPS) {
+    const L = local[k] || {}, R = remote[k] || {}, lc = lk[k] || {}, rc = rk[k] || {}, o = {}, c = { ...rc };
+    for (const e in lc) c[e] = Math.max(lc[e], c[e] || 0);
+    for (const e of new Set([...Object.keys(L), ...Object.keys(R)])) {
+      const src = (rc[e] || 0) > (lc[e] || 0) ? R : (lc[e] || 0) > (rc[e] || 0) ? L : (e in L ? L : R);
+      if (e in src) o[e] = src[e];
+    }
+    out[k] = o; out._mk[k] = c;
+  }
   const ss = { ...(remote.focus?.sessions || {}) };
   for (const [k, v] of Object.entries(local.focus?.sessions || {})) ss[k] = Math.max(v, ss[k] || 0);
   out.focus = { ...local.focus, sessions: ss };
@@ -2806,8 +2827,10 @@ const A = {
     SY = {}; saveSY(); syncStatus = 'off'; render(); toast('Sync turned off here');
   },
   resetAll: () => {
-    if (!confirm('Erase all tasks, habits, notes and settings on this device? This can’t be undone.')) return;
-    localStorage.removeItem(KEY); localStorage.removeItem('dash.weather'); S = DEFAULTS(); W = {}; save(); applyTheme(); render(true); toast('Fresh start');
+    if (!confirm(`Erase all tasks, habits, notes and settings${SY.vault ? ' on every device that syncs with this one' : ' on this device'}? This can’t be undone.`)) return;
+    const gone = LISTS.flatMap(l => (S[l] || []).map(x => x.id)), dead = { ...(S._deleted || {}) }, now = Date.now();
+    gone.forEach(id => { dead[id] = now; });
+    localStorage.removeItem(KEY); localStorage.removeItem('dash.weather'); const mk = S._mk; S = DEFAULTS(); S._deleted = dead; S._mk = mk; W = {}; save(); applyTheme(); render(true); toast('Fresh start');
   },
 };
 

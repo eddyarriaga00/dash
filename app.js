@@ -46,7 +46,8 @@ const I = {
 
 /* ---------- state ---------- */
 const KEY = 'dash.v1';
-const ACCENTS = { violet: '#7c6cff', blue: '#3d8bff', teal: '#14b8a6', green: '#22c55e', orange: '#ff8a3d', pink: '#f43f8e', red: '#ef4444', gold: '#eab308' };
+// Apple's system colors (indigo, blue, teal, green, orange, pink, red, yellow).
+const ACCENTS = { violet: '#5e5ce6', blue: '#0a84ff', teal: '#30b0c7', green: '#30d158', orange: '#ff9f0a', pink: '#ff375f', red: '#ff453a', gold: '#f5b800' };
 const HABIT_EMOJI = ['💊', '🚿', '🦷', '💪', '📚', '🧘', '🏃', '🥗', '😴', '🧴', '🛏️', '💻', '🚶', '🧹', '✍️', '📵', '🧠', '🌱', '☀️', '🎸'];
 const WHEN = { am: ['Morning', '🌅'], any: ['Anytime', '☀️'], pm: ['Evening', '🌙'] };
 const HABIT_IDEAS = [
@@ -458,7 +459,7 @@ function applyTheme() {
   root.dataset.theme = S.theme;
   root.style.setProperty('--accent', ACCENTS[S.accent] || ACCENTS.violet);
   const dark = S.theme === 'dark' || (S.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
-  $('meta[name=theme-color]').content = dark ? '#09090d' : '#f2f2f7';
+  $('meta[name=theme-color]').content = dark ? '#000000' : '#f2f2f7';
 }
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
 
@@ -1075,12 +1076,12 @@ function workCard() {
     <div class="muted" style="margin-bottom:10px">Which calendar has your shifts?</div>
     <div class="chips">${cals.map(c => `<button class="chip" data-a="setWorkCal" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></section>`;
   const now = Date.now(), all = shifts(), evs = all.filter(e => (e.end || e.start + 36e5) > now);
-  const head = secHead(`💼 ${S.job ? esc(S.job) : 'Work'}`, `<span style="display:flex;gap:14px"><button class="link-btn" data-a="openImport">📷 Update</button><button class="link-btn" data-a="addShift">+ Shift</button></span>`);
+  const head = secHead(`💼 ${S.job ? esc(S.job) : 'Work'}`, `<span style="display:flex;gap:14px"><button class="link-btn" data-a="openImport">Update</button><button class="link-btn" data-a="addShift">+ Shift</button></span>`);
   if (!evs.length) return `<section class="card" id="work">${head}<button class="chip" data-a="openImport" style="margin-bottom:10px">📷 Add shifts from screenshots</button><div class="muted">${CAL.error && S.calUrl ? 'Couldn’t load your schedule from that link.' : mine || !src ? `No shifts coming up 🎉${CAL.at && now - CAL.at > 3 * 864e5 ? ' (last update from your iPhone was ' + ago(CAL.at).toLowerCase() + ')' : ''}` : 'Loading your schedule…'}</div></section>`;
   const dayName = t => { const n = dayDiff(new Date(), new Date(t)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
   const range = e => e.allDay ? 'All day' : `${tm(e.start)} – ${tm(e.end || e.start)}`;
   const [n, ...rest] = evs, on = n.start <= now && !n.allDay, soon = !n.allDay && !on && n.start - now < 30 * 36e5;
-  const status = n.allDay ? dayName(n.start) : on ? `On shift · ${dur(n.end - now)} left` : n.start - now < 864e5 ? `Starts in ${dur(n.start - now)}` : dayName(n.start);
+  const status = n.allDay ? dayName(n.start) : on ? `On shift · ${dur(n.end - now)} left` : n.start - now < 864e5 ? `Starts in ${dur(n.start - now)}` : dayDiff(new Date(), new Date(n.start)) === 1 ? 'Tomorrow' : `In ${dayDiff(new Date(), new Date(n.start))} days`;
 
   // Helpful times around the shift
   const tips = [];

@@ -723,3 +723,131 @@ i.d-event { background: #5ac8fa !important; } i.d-task { background: var(--dange
 .rt-done { display: flex; align-items: center; justify-content: space-between; font-weight: 650; }
 .rt-mini { margin: 8px 0 4px; font-size: 13px; }
 i.d-off { background: var(--faint) !important; }
+
+/* =====================================================================
+   Apple design pass — iOS system colors, materials and type.
+   Colors follow Apple's dynamic system colors (systemGroupedBackground,
+   secondarySystemGroupedBackground, fills, labels, separator).
+   ===================================================================== */
+:root, :root[data-theme="dark"] {
+  --bg: #000; --bg-2: #1c1c1e; --card-solid: #1c1c1e;
+  --surface: #1c1c1e;                       /* secondarySystemGroupedBackground */
+  --surface-2: rgba(118, 118, 128, .24);    /* tertiarySystemFill */
+  --surface-3: rgba(118, 118, 128, .36);    /* secondarySystemFill */
+  --border: rgba(84, 84, 88, .55);          /* separator */
+  --text: #fff; --muted: rgba(235, 235, 245, .6); --faint: rgba(235, 235, 245, .3);
+  --danger: #ff453a; --ok: #30d158; --warn: #ff9f0a;
+  --shadow: none; --sheet-bg: #1c1c1e; --seg-on: #636366; --tab-off: #8e8e93;
+  --r: 20px; --r-sm: 12px;
+}
+:root[data-theme="light"] {
+  --bg: #f2f2f7; --bg-2: #fff; --card-solid: #fff; --surface: #fff;
+  --surface-2: rgba(118, 118, 128, .12); --surface-3: rgba(118, 118, 128, .2);
+  --border: rgba(60, 60, 67, .2);
+  --text: #000; --muted: rgba(60, 60, 67, .6); --faint: rgba(60, 60, 67, .3);
+  --danger: #ff3b30; --ok: #34c759; --warn: #ff9500;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .04); --sheet-bg: #f2f2f7; --seg-on: #fff; --tab-off: #8e8e93;
+}
+@media (prefers-color-scheme: light) {
+  :root[data-theme="auto"] {
+    --bg: #f2f2f7; --bg-2: #fff; --card-solid: #fff; --surface: #fff;
+    --surface-2: rgba(118, 118, 128, .12); --surface-3: rgba(118, 118, 128, .2);
+    --border: rgba(60, 60, 67, .2);
+    --text: #000; --muted: rgba(60, 60, 67, .6); --faint: rgba(60, 60, 67, .3);
+    --danger: #ff3b30; --ok: #34c759; --warn: #ff9500;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .04); --sheet-bg: #f2f2f7; --seg-on: #fff; --tab-off: #8e8e93;
+  }
+}
+
+/* Type: SF via the system font, Apple's text styles */
+body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif; font-size: 16px; letter-spacing: -.01em; }
+h1, h2, h3, .sheet-title, .sec-toggle span, .w-temp { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif; }
+body::before { display: none; }                                   /* flat backgrounds, no glow */
+.hero h1 { font-size: 34px; font-weight: 700; letter-spacing: .01em; line-height: 1.1; }   /* Large Title */
+.page-head h1 { font-size: 34px; font-weight: 700; letter-spacing: .01em; }
+.eyebrow { font-size: 13px; font-weight: 600; letter-spacing: .02em; }
+.sec-toggle span { font-size: 22px; font-weight: 700; letter-spacing: .01em; }                /* Title 2 */
+.sec-head h2 { font-size: 17px; font-weight: 600; letter-spacing: -.02em; }                    /* Headline */
+.sheet-title { font-size: 20px; font-weight: 700; letter-spacing: .01em; }
+.link-btn, .ghost { font-weight: 500; font-size: 16px; letter-spacing: -.02em; }
+.ghost { font-weight: 600; }
+.count-pill { font-weight: 600; }
+
+/* Cards: solid grouped cells, no borders */
+.card { border: 0; box-shadow: var(--shadow); padding: 16px; }
+.weather { border-radius: var(--r); }
+.w-temp { font-weight: 200; letter-spacing: -.02em; }
+.shift { border-radius: 14px; }
+.shift-when b { font-weight: 700; letter-spacing: -.01em; }
+.shift-when span { font-weight: 600; }
+.pill { font-weight: 600; }
+
+/* Inset grouped lists with separators inset to the text, like Settings */
+.list { border: 0; border-radius: 12px; box-shadow: var(--shadow); }
+.row { border-bottom: 0; position: relative; min-height: 48px; padding: 11px 16px; }
+.row:not(:last-child)::after { content: ""; position: absolute; left: 16px; right: 0; bottom: 0; height: .5px; background: var(--border); }
+.row:has(> .ic):not(:last-child)::after { left: 58px; }
+.row .ic { width: 29px; height: 29px; border-radius: 7px; }
+.row-title { font-weight: 400; }
+/* Settings menu: each group is one inset list, title row joined to its contents */
+.settings-label { margin: 12px 0 0 !important; border: 0; border-radius: 12px; font-size: 17px; font-weight: 400; letter-spacing: -.02em; padding: 10px 16px; min-height: 48px; box-shadow: var(--shadow); position: relative; }
+.settings-label .ic { width: 29px; height: 29px; border-radius: 7px; }
+.settings-label:not(.shut) { border-radius: 12px 12px 0 0; }
+.settings-label:not(.shut)::after { content: ""; position: absolute; left: 57px; right: 0; bottom: 0; height: .5px; background: var(--border); }
+.settings-label:not(.shut) + .list { border-radius: 0 0 12px 12px; }
+.auth-btn { border: 0; font-weight: 600; }
+.shift-row, .stock { border-bottom-width: .5px; }
+
+/* Controls */
+.btn { border-radius: 14px; font-weight: 600; font-size: 17px; letter-spacing: -.02em; padding: 14px; }
+.btn.secondary { background: var(--surface-2); color: var(--accent); }
+.input { border: 0; border-radius: 10px; font-size: 17px; }
+.input:focus { background: var(--surface-3); box-shadow: 0 0 0 2px var(--accent-mid); }
+.seg { border-radius: 9px; padding: 2px; background: var(--surface-2); }
+.seg button { border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--text); padding: 7px 6px; }
+.seg button.on, :root[data-theme="dark"] .seg button.on { background: var(--seg-on); font-weight: 600; box-shadow: 0 3px 8px rgba(0, 0, 0, .12), 0 3px 1px rgba(0, 0, 0, .04); }
+.toggle input:checked + i { background: var(--ok); }                   /* iOS switches are green */
+.toggle i { background: var(--surface-3); }
+.chip, .habit-chip { font-weight: 500; border-width: 0; }
+.chip.on, .habit-chip.on { background: var(--accent); color: #fff; }
+.habit-chip.on small { opacity: .85; }
+.habit-chip.idea { border: 1px dashed var(--faint); }
+.icon-btn { background: var(--surface-2); }
+.add-btn { border-radius: 12px; }
+
+/* Tab bar: system material with a hairline */
+#tabs { background: color-mix(in srgb, var(--bg) 78%, transparent); -webkit-backdrop-filter: saturate(180%) blur(30px); backdrop-filter: saturate(180%) blur(30px); border-top: .5px solid var(--border); }
+.tab { color: var(--tab-off); font-weight: 500; font-size: 10px; }
+.tab.on { color: var(--accent); }
+.fab { border-radius: 50%; width: 50px; height: 50px; box-shadow: 0 6px 16px -6px var(--accent-mid); }
+
+/* Sheets: grouped background, iOS-style grabber */
+.sheet { background: var(--sheet-bg); border-radius: 22px 22px 0 0; box-shadow: 0 -6px 30px rgba(0, 0, 0, .25); }
+:root[data-theme="dark"] .sheet, :root[data-theme="auto"] .sheet { border-top: 0; }
+.grabber { width: 36px; height: 5px; background: var(--faint); opacity: .6; }
+.sheet .rt-row, .sheet .habit-chip:not(.on), .sheet .chip:not(.on) { background: var(--surface); }
+.sheet-backdrop { background: rgba(0, 0, 0, .4); }
+
+/* Toast: a frosted capsule */
+#toast { background: color-mix(in srgb, var(--surface) 82%, transparent); color: var(--text); -webkit-backdrop-filter: saturate(180%) blur(24px); backdrop-filter: saturate(180%) blur(24px);
+  border-radius: 99px; padding: 12px 20px; font-weight: 600; box-shadow: 0 8px 28px rgba(0, 0, 0, .22); border: .5px solid var(--border); }
+#toast button { font-weight: 700; }
+
+/* Calendar like Apple's: plain dates, a filled circle for the selected day, today in the accent color */
+.cal-d { background: transparent; border: 0; border-radius: 12px; padding: 5px 0 4px; }
+.cal-d b { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 17px; font-weight: 400; }
+.cal-d.has { background: var(--accent-soft); }
+.cal-d.t { border: 0; }
+.cal-d.t b { color: var(--accent); font-weight: 600; }
+.cal-d.sel { border: 0; box-shadow: none; }
+.cal-d.sel b { background: var(--accent); color: #fff; font-weight: 600; }
+.cal-d.t.sel b { color: #fff; }
+.cal-w small { font-size: 11px; font-weight: 600; color: var(--muted); }
+.cal-nav b { font-size: 20px; font-weight: 700; }
+.cal-nav .mv { background: transparent; color: var(--accent); font-size: 30px; font-weight: 400; }
+
+/* Routines and habits: checkmarks in the accent, roomy rows */
+.rt-row { border-radius: 12px; border: 0; }
+.rt-check { border-width: 1.5px; }
+.habit-emoji { border-radius: 12px; }
+.habit-go { border-radius: 50%; }

@@ -16,6 +16,14 @@ const dayDiff = (a, b) => Math.round((parseKey(dkey(b)) - parseKey(dkey(a))) / 8
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtDate = (k, o = { month: 'short', day: 'numeric' }) => parseKey(k).toLocaleDateString(undefined, o);
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function hapt(ms = 10) {
+  try {
+    if (!isIOS()) return navigator.vibrate?.(ms);
+    let l = hapt.l;
+    if (!l) { l = hapt.l = document.createElement('label'); l.setAttribute('aria-hidden', 'true'); l.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;overflow:hidden'; l.innerHTML = '<input type="checkbox" switch tabindex="-1">'; document.body.appendChild(l); }
+    l.click();
+  } catch { }
+}
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 /* ---------- icons ---------- */
@@ -471,6 +479,20 @@ function ring(pct, size = 84, stroke = 9) {
     <circle class="ring-fg" cx="${h}" cy="${h}" r="${r}" stroke-width="${stroke}" stroke-dasharray="${c.toFixed(2)}"
       stroke-dashoffset="${(c * (1 - Math.min(1, pct))).toFixed(2)}" transform="rotate(-90 ${h} ${h})"/></svg>`;
 }
+const RING_C = ['#fa114f', '#92e82a', '#1eeaef'];
+function rings(vals, size = 112, stroke = 13, gap = 2.5) {
+  const h = size / 2;
+  return `<svg class="rings" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">${vals.map((v, i) => {
+    const r = h - stroke / 2 - i * (stroke + gap), c = 2 * Math.PI * r, p = Math.max(0, v);
+    const lap = Math.min(1, p), over = Math.min(1, Math.max(0, p - 1));
+    return `<g style="--rc:${RING_C[i]}" class="${p >= 1 ? 'closed' : ''}"><circle class="rg-bg" cx="${h}" cy="${h}" r="${r}" stroke-width="${stroke}"/>
+      <circle class="rg-fg" cx="${h}" cy="${h}" r="${r}" stroke-width="${stroke}" stroke-dasharray="${c.toFixed(2)}" style="--c:${c.toFixed(2)}"
+        stroke-dashoffset="${(c * (1 - lap)).toFixed(2)}" transform="rotate(-90 ${h} ${h})"/>${over ? `
+      <circle class="rg-fg rg-over" cx="${h}" cy="${h}" r="${r}" stroke-width="${stroke}" stroke-dasharray="${c.toFixed(2)}" style="--c:${c.toFixed(2)}"
+        stroke-dashoffset="${(c * (1 - over)).toFixed(2)}" transform="rotate(-90 ${h} ${h})"/>` : ''}</g>`;
+  }).join('')}</svg>`;
+}
+let ringsDrawn = false;
 const secHead = (title, action = '') => `<div class="sec-head"><h2>${title}</h2>${action}</div>`;
 const emojiPicker = (list, current) => `
   <div class="chips" data-group="emoji">
@@ -1081,7 +1103,7 @@ function workCard() {
   const dayName = t => { const n = dayDiff(new Date(), new Date(t)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); };
   const range = e => e.allDay ? 'All day' : `${tm(e.start)} – ${tm(e.end || e.start)}`;
   const [n, ...rest] = evs, on = n.start <= now && !n.allDay, soon = !n.allDay && !on && n.start - now < 30 * 36e5;
-  const status = n.allDay ? dayName(n.start) : on ? `On shift · ${dur(n.end - now)} left` : n.start - now < 864e5 ? `Starts in ${dur(n.start - now)}` : dayDiff(new Date(), new Date(n.start)) === 1 ? 'Tomorrow' : `In ${dayDiff(new Date(), new Date(n.start))} days`;
+  const status = n.allDay ? dayName(n.start) : on ? `On shift · ${dur(n.end - now)} left` : n.start - now < 864e5 ? `Starts in ${dur(n.start - now)}` : dayDiff(new Date(), new Date(n.start)) === 1 ? `In ${Math.round((n.start - now) / 36e5)} hours` : `In ${dayDiff(new Date(), new Date(n.start))} days`;
 
   // Helpful times around the shift
   const tips = [];
@@ -1369,7 +1391,7 @@ function toggleTask(id) {
   const t = byId('tasks', id); if (!t) return;
   const done = !t.done, msg = setTaskDone(id, done);
   $$(`.swipe[data-tid="${id}"] .task, .cal-row[data-tid="${id}"]`).forEach(el => el.classList.toggle('done', done));
-  if (done) navigator.vibrate?.(10);
+  if (done) hapt();
   if (msg) toast(msg);
   setTimeout(() => render(), done ? 450 : 0);
 }
@@ -1394,7 +1416,7 @@ document.addEventListener('touchmove', e => {
   sw.row.querySelector('.task').style.transform = `translateX(${dx}px)`;
   sw.row.classList.toggle('right', dx > 0);
   const armed = Math.abs(dx) > 90;
-  if (armed !== sw.row.classList.contains('armed')) { sw.row.classList.toggle('armed', armed); if (armed) navigator.vibrate?.(8); }
+  if (armed !== sw.row.classList.contains('armed')) { sw.row.classList.toggle('armed', armed); if (armed) hapt(8); }
 }, { passive: false });
 document.addEventListener('touchend', () => {
   if (!sw || sw.lock !== 'x') { sw = null; return; }
@@ -1409,6 +1431,7 @@ document.addEventListener('touchend', () => {
 /* =========================================================
    VIEWS
    ========================================================= */
+const FOCUS_GOAL = 4;
 function viewHome() {
   rollDay();
   const now = new Date(), h = now.getHours(), t = dkey();
@@ -1419,7 +1442,7 @@ function viewHome() {
   const pct = total ? done / total : 0;
   const sessions = S.focus.sessions[t] || 0;
 
-  const upNext = S.tasks.filter(x => !x.done).sort(taskSort).slice(0, 4);
+  const upNext = S.tasks.filter(x => !x.done).sort(taskSort).slice(0, 4), late = S.tasks.filter(x => !x.done && x.due && x.due < t);
   const f = S.focus, left = focusLeft();
   const cds = S.countdowns.map(c => ({ ...c, next: nextDate(c) })).sort((a, b) => a.next.localeCompare(b.next));
 
@@ -1448,18 +1471,19 @@ function viewHome() {
     anime: () => animeCard(),
     stocks: () => stocksCard(),
     today: () => `<section class="card">
-    <div class="today">
-      <div class="ring-wrap">${ring(pct)}<div class="ring-label"><div>${Math.round(pct * 100)}%<small>today</small></div></div></div>
+    <div class="today ${ringsDrawn ? '' : 'draw'}">
+      <div class="ring-wrap">${rings([tt.total ? tt.done.length / tt.total : 0, dueH.length ? nDone / dueH.length : 0, sessions / FOCUS_GOAL])}</div>
       <div class="today-stats">
-        <div class="ts"><span class="dot"></span>Tasks<b>${tt.done.length}/${tt.total}</b></div>
-        <div class="ts"><span class="dot" style="background:#ff8a3d"></span>Habits<b>${nDone}/${dueH.length}</b></div>
-        <div class="ts"><span class="dot" style="background:#4aa8ff"></span>Focus<b>${sessions} ${sessions === 1 ? 'session' : 'sessions'}</b></div>
+        <div class="ts" style="--rc:${RING_C[0]}"><small>Tasks</small><b>${tt.done.length}<i>/${tt.total}</i></b></div>
+        <div class="ts" style="--rc:${RING_C[1]}"><small>Habits</small><b>${nDone}<i>/${dueH.length}</i></b></div>
+        <div class="ts" style="--rc:${RING_C[2]}"><small>Focus</small><b>${sessions}<i>/${FOCUS_GOAL}</i></b></div>
       </div>
-    </div>
+    </div>${pct >= 1 && total ? '<div class="all-closed">🎉 Every ring closed today</div>' : ''}
     <label class="intention"><span>🎯</span><input data-input="intention" value="${esc(S.intention.text)}" placeholder="Today’s one big thing…" enterkeyhint="done"></label>
   </section>`,
     tasks: () => `<section class="card">
     ${secHead('Up next', `<button class="link-btn" data-a="tab" data-tab="tasks">See all</button>`)}
+    ${late.length > 1 ? `<button class="late-bar" data-a="moveOverdue"><span>${late.length} overdue</span><b>Move to today</b></button>` : ''}
     ${upNext.length ? `<div class="task-list">${upNext.map(taskRow).join('')}</div>`
       : `<div class="empty"><div class="big">✨</div><b>All clear</b>Nothing on your plate.</div>`}
   </section>`,
@@ -2001,15 +2025,44 @@ function tidySettings(root) {
     el.classList.toggle('shut', !setOpen.has(name));
   });
 }
+const calm = matchMedia('(prefers-reduced-motion: reduce)');
 function render(animate = false) {
+  if (animate === 'tab' && document.startViewTransition && !calm.matches && !render.vt) {
+    render.vt = true;
+    return document.startViewTransition(() => { render.vt = false; draw(true, true); }).finished.catch(() => { }).finally(() => { render.vt = false; });
+  }
+  draw(animate, false);
+}
+function draw(animate, vt) {
   const v = $('#view');
   const y = scrollY;
   v.innerHTML = (VIEWS[S.tab] || viewHome)();
   if (S.tab === 'settings') tidySettings(v);
-  if (animate) { v.classList.remove('enter'); void v.offsetWidth; v.classList.add('enter'); scrollTo(0, 0); }
+  v.querySelectorAll('.toggle input[type=checkbox]').forEach(i => i.setAttribute('switch', ''));
+  if (S.tab === 'home') ringsDrawn = true;
+  if (animate) { v.classList.remove('enter'); if (!vt) { void v.offsetWidth; v.classList.add('enter'); } scrollTo(0, 0); }
   else scrollTo(0, y);
-  renderTabs(); loadWidgets();
+  renderTabs(); loadWidgets(); setBadge(); navTitle();
 }
+// The number on the home-screen icon: tasks due today or overdue (iOS 16.4+, needs notifications allowed).
+function setBadge() {
+  const n = todayTasks().open.length;
+  if (setBadge.n === n || !navigator.setAppBadge) return; setBadge.n = n;
+  (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => { });
+}
+// iOS large titles: once the big title scrolls away, a small one sits in a frosted bar at the top.
+function navTitle() {
+  let bar = $('#navbar');
+  if (!bar) { bar = document.createElement('div'); bar.id = 'navbar'; bar.setAttribute('aria-hidden', 'true'); document.body.appendChild(bar); }
+  const h = $('#view h1');
+  bar.textContent = !h ? '' : S.tab === 'home' ? new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }) : h.textContent.trim();
+  navScroll();
+}
+function navScroll() {
+  const h = $('#view h1'), bar = $('#navbar'); if (!bar) return;
+  bar.classList.toggle('on', !!h && h.getBoundingClientRect().bottom < 8);
+}
+addEventListener('scroll', navScroll, { passive: true });
 function renderTabs() {
   const due = todayTasks().open.length;
   const tab = (k, label, icon, badge = 0) => `<button class="tab ${S.tab === k ? 'on' : ''}" data-a="tab" data-tab="${k}" aria-label="${label}">${icon}<span>${label}</span>${badge ? `<span class="badge">${badge}</span>` : ''}</button>`;
@@ -2019,7 +2072,7 @@ function renderTabs() {
 }
 function go(tab) {
   if (S.tab === tab) return scrollTo({ top: 0, behavior: 'smooth' });
-  S.tab = tab; save(); render(true);
+  S.tab = tab; save(); render('tab');
 }
 
 /* =========================================================
@@ -2380,11 +2433,16 @@ const A = {
   hideInstall: () => { S.hideInstall = true; save(); render(); },
   setMood: el => {
     const t = dkey(), v = +el.dataset.v;
-    if (S.moods[t] === v) delete S.moods[t]; else { S.moods[t] = v; navigator.vibrate?.(10); }
+    if (S.moods[t] === v) delete S.moods[t]; else { S.moods[t] = v; hapt(); }
     save(); render();
   },
 
   toggleTask: el => toggleTask(el.dataset.id),
+  moveOverdue: () => {
+    const t = dkey(), late = S.tasks.filter(x => !x.done && x.due && x.due < t), was = late.map(x => [x, x.due]);
+    late.forEach(x => { x.due = t; }); save(); hapt(); render();
+    toast(`Moved ${late.length} to today`, () => { was.forEach(([x, d]) => { x.due = d; }); save(); render(); });
+  },
   editTask: el => taskSheet(byId('tasks', el.dataset.id)),
   deleteTask: el => removeWithUndo('tasks', el.dataset.id, 'Task'),
   taskFilter: el => { S.taskFilter = el.dataset.f; save(); render(); },
@@ -2396,7 +2454,7 @@ const A = {
 
   toggleHabit: el => {
     const h = byId('habits', el.dataset.id), k = el.dataset.day; if (!h) return;
-    const done = bumpHabit(h, k); if (hCount(h, k)) navigator.vibrate?.(10);
+    const done = bumpHabit(h, k); if (hCount(h, k)) hapt();
     save(); el.classList.toggle('on', done);
     const left = dueHabits().filter(x => !hOk(x)).length;
     if (done && k === dkey() && !left && S.habits.length > 1) toast('Every habit done today 🎉');
@@ -2412,7 +2470,7 @@ const A = {
     const w = el.dataset.w, k = dkey(), prev = {};
     for (const h of routineList(w)) if (!hDone(h, k)) { prev[h.id] = h.log[k]; h.log[k] = hTarget(h); }
     if (!Object.keys(prev).length) return;
-    save(); navigator.vibrate?.(15); closeSheet(); render();
+    save(); hapt(15); closeSheet(); render();
     toast(`${ROUT[w][1]} done ✓`, () => { for (const [id, v] of Object.entries(prev)) { const h = byId('habits', id); if (h) h.log[k] = v === undefined ? 0 : v; } save(); render(); });
   },
   skipHabit: el => {

@@ -39,4 +39,5 @@ After you change any files, bump `VERSION` in `sw.js` (for example `dash-v2`). T
 python3 -m http.server 8787
 ```
 - **StockBot:** a Money card reads StockBot's published `core.json` (equity, today's P/L, positions).
+- **Spotify:** now playing with play/pause/skip. You connect your own Spotify app in Settings (PKCE, no secret); tokens stay on the device.
 - **Rings, haptics, badge:** Fitness-style rings for tasks, habits and focus; light haptics on iPhone; the app icon shows tasks due.

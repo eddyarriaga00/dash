@@ -922,6 +922,96 @@ function portfolioCard() {
   </section>`;
 }
 
+/* ---------- Spotify now playing. You sign in with your own Spotify app (PKCE, no secret);
+   the tokens stay in this device's storage and never go to the sync vault. ---------- */
+const SP_SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing user-read-recently-played';
+const spRedirect = () => location.origin + location.pathname;
+const spOn = () => S.widgets.spotify !== false;
+let SPT = (() => { try { return JSON.parse(localStorage.getItem('dash.spotify')) || {}; } catch { return {}; } })();
+const spSave = () => { try { localStorage.setItem('dash.spotify', JSON.stringify(SPT)); } catch { } };
+let SP = {};
+const b64url = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+async function spConnect() {
+  const id = (S.spotifyId || '').trim(); if (!id) return toast('Paste your Spotify Client ID first');
+  const v = b64url(crypto.getRandomValues(new Uint8Array(48))), st = b64url(crypto.getRandomValues(new Uint8Array(12)));
+  const ch = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(v)));
+  SPT = { pending: { v, st } }; spSave();
+  location.assign('https://accounts.spotify.com/authorize?' + new URLSearchParams({ client_id: id, response_type: 'code', redirect_uri: spRedirect(), scope: SP_SCOPES, state: st, code_challenge_method: 'S256', code_challenge: ch }));
+}
+async function spToken(body) {
+  const r = await fetch('https://accounts.spotify.com/api/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: (S.spotifyId || '').trim(), ...body }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(d.error_description || d.error || 'HTTP ' + r.status); e.code = d.error; throw e; }
+  SPT = { at: d.access_token, exp: Date.now() + (d.expires_in - 60) * 1000, rt: d.refresh_token || SPT.rt }; spSave();
+}
+async function spFinish(code, state) {
+  const p = SPT.pending; if (!p || p.st !== state) return toast('Spotify sign-in didn’t match. Try again.');
+  try { await spToken({ grant_type: 'authorization_code', code, redirect_uri: spRedirect(), code_verifier: p.v }); SP = {}; toast('Spotify connected'); render(); }
+  catch (e) { SPT = {}; spSave(); toast('Spotify: ' + e.message); }
+}
+function spDisconnect() { SPT = {}; SP = {}; spSave(); render(); toast('Spotify disconnected'); }
+async function spApi(path, opt = {}) {
+  if (!SPT.rt) throw new Error('Not connected');
+  try { if (!SPT.at || Date.now() > SPT.exp) await spToken({ grant_type: 'refresh_token', refresh_token: SPT.rt }); }
+  catch (e) { if (e.code === 'invalid_grant' || e.code === 'invalid_client') { SPT = {}; spSave(); } throw e; }
+  const r = await fetch('https://api.spotify.com/v1' + path, { ...opt, headers: { Authorization: 'Bearer ' + SPT.at } });
+  if (r.status === 401) SPT.at = '';
+  return r;
+}
+const spArt = imgs => (imgs || [])[1]?.url || (imgs || [])[0]?.url || '';
+async function loadSpotify(force) {
+  if (!SPT.rt || !spOn() || document.hidden || (!force && Date.now() - (SP.ts || 0) < 15e3)) return;
+  SP.ts = Date.now();
+  try {
+    const r = await spApi('/me/player?additional_types=episode'), d = r.status === 200 ? await r.json() : null, it = d?.item;
+    if (it) SP = { ts: Date.now(), ok: true, playing: !!d.is_playing, pos: d.progress_ms || 0, dur: it.duration_ms || 1, at: Date.now(), title: it.name,
+      artist: (it.artists || []).map(a => a.name).join(', ') || it.show?.name || '', art: spArt(it.album?.images || it.images), url: it.external_urls?.spotify || '', device: d.device?.name || '' };
+    else {
+      const rr = await spApi('/me/player/recently-played?limit=1'), t = rr.ok ? (await rr.json()).items?.[0] : null;
+      SP = { ts: Date.now(), ok: true, idle: true, ...(t ? { title: t.track.name, artist: t.track.artists.map(a => a.name).join(', '), art: spArt(t.track.album?.images), url: t.track.external_urls?.spotify || '', when: Date.parse(t.played_at) } : {}) };
+    }
+  } catch (e) { SP = { ts: Date.now(), err: e.message }; }
+  const el = $('#spotify'); if (el) el.outerHTML = spotifyCard();
+}
+const spPos = () => Math.min(SP.dur, SP.pos + (SP.playing ? Date.now() - SP.at : 0));
+const SPI = {
+  prev: '<svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M6 5h2v14H6zM20 5v14L9 12z"/></svg>',
+  next: '<svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg>',
+  play: '<svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M7 4.5v15l13-7.5z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M6 4h4.5v16H6zM13.5 4H18v16h-4.5z"/></svg>',
+};
+function spotifyCard() {
+  if (!spOn() || !SPT.rt) return '<span id="spotify" hidden></span>';
+  const head = secHead('🎧 Spotify', SP.url ? `<a class="link-btn" href="${esc(SP.url)}" target="_blank" rel="noopener">Open</a>` : '');
+  if (SP.err) return `<section class="card" id="spotify">${head}<div class="muted">Couldn’t reach Spotify${SPT.rt ? '' : ' · connect again in Settings'}.</div></section>`;
+  if (!SP.ok) return `<section class="card" id="spotify">${head}<div class="muted">Loading…</div></section>`;
+  if (SP.idle && !SP.title) return `<section class="card" id="spotify">${head}<div class="muted">Nothing playing right now.</div></section>`;
+  const art = `<a class="sp-art" href="${esc(SP.url || 'https://open.spotify.com')}" target="_blank" rel="noopener">${SP.art ? `<img src="${esc(SP.art)}" alt="">` : ''}</a>`;
+  return `<section class="card" id="spotify">${head}
+    <div class="sp ${SP.playing ? 'on' : ''}">${art}
+      <div class="sp-info"><small>${SP.idle ? `Last played · ${ago(SP.when).toLowerCase()}` : `${SP.playing ? 'Now playing' : 'Paused'}${SP.device ? ` · ${esc(SP.device)}` : ''}`}</small>
+        <b>${esc(SP.title)}</b><span>${esc(SP.artist)}</span>
+        ${SP.idle ? '' : `<div class="sp-bar"><i style="width:${(spPos() / SP.dur * 100).toFixed(1)}%"></i></div>`}</div></div>
+    ${SP.idle ? '' : `<div class="sp-ctl"><button data-a="spPrev" aria-label="Previous">${SPI.prev}</button><button class="sp-play" data-a="spToggle" aria-label="${SP.playing ? 'Pause' : 'Play'}">${SP.playing ? SPI.pause : SPI.play}</button><button data-a="spNext" aria-label="Next">${SPI.next}</button></div>`}
+  </section>`;
+}
+async function spCtl(path, method) {
+  hapt();
+  try {
+    const r = await spApi('/me/player/' + path, { method });
+    if (r.status === 403) toast('Play controls need Spotify Premium');
+    else if (r.status === 404) toast('Open Spotify on a device first');
+  } catch { toast('Couldn’t reach Spotify'); }
+  setTimeout(() => loadSpotify(true), 450);
+}
+// The bar moves every second; a fresh check every 15s, and right when the song should end.
+setInterval(() => {
+  if (S.tab !== 'home' || !SP.ok || SP.idle) return;
+  const b = $('#spotify .sp-bar i'); if (b) b.style.width = (spPos() / SP.dur * 100).toFixed(1) + '%';
+  if ((SP.playing && spPos() >= SP.dur && Date.now() - SP.ts > 3000) || Date.now() - SP.ts > 15e3) loadSpotify(true);
+}, 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.tab === 'home') loadSpotify(true); });
+
 /* ---------- work schedule (calendar feed) + stocks, via the dash-proxy edge function ---------- */
 const proxy = q => fetch(`${SB_URL}/functions/v1/dash-proxy?${q}`, { headers: { apikey: SB_KEY, Authorization: `Bearer ${SB_KEY}` } });
 let CAL = (() => { try { return JSON.parse(localStorage.getItem('dash.cal')) || {}; } catch { return {}; } })();
@@ -1381,7 +1471,7 @@ function stocksCard() {
         <div class="px"><b>${x.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b><span class="chg ${up ? 'up' : 'down'}">${up ? '+' : ''}${ch.toFixed(2)}%</span></div></div>`; }).join('')}</div>`}
   </section>`;
 }
-const loadWidgets = () => { if (S.tab === 'home') { loadNBA(); loadAnime(); loadPortfolio(); } if (S.tab === 'home' || S.tab === 'money') { loadCal(); loadStocks(); } };
+const loadWidgets = () => { if (S.tab === 'home') { loadNBA(); loadAnime(); loadPortfolio(); loadSpotify(); } if (S.tab === 'home' || S.tab === 'money') { loadCal(); loadStocks(); } };
 
 /* =========================================================
    FOCUS TIMER
@@ -1506,6 +1596,7 @@ function viewHome() {
     anime: () => animeCard(),
     stocks: () => stocksCard(),
     portfolio: () => portfolioCard(),
+    spotify: () => spotifyCard(),
     today: () => `<section class="card">
     <div class="today ${ringsDrawn ? '' : 'draw'}">
       <div class="ring-wrap">${rings([tt.total ? tt.done.length / tt.total : 0, dueH.length ? nDone / dueH.length : 0, sessions / FOCUS_GOAL])}</div>
@@ -1648,10 +1739,10 @@ function searchResults(q) {
 }
 
 /* ---------- home layout: sections you can collapse, reorder, and hide cards in ---------- */
-const CARD_LABEL = { routine: '🌅 Morning & night routine', weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', portfolio: '🤖 StockBot portfolio', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
+const CARD_LABEL = { routine: '🌅 Morning & night routine', weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', portfolio: '🤖 StockBot portfolio', spotify: '🎧 Spotify', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
   moneySum: '💳 Money summary', pay: '💵 Pay estimate', spend: '💸 Spending', bills: '🧾 Bills', stocks: '📈 Watchlist', nba: '🏀 NBA', anime: '📺 Anime', links: '🔗 Quick links', tools: '⏱️ Focus & water', countdowns: '⏳ Countdowns' };
 const SECTIONS = [['top', '', ['routine', 'weather']], ['work', 'Work', ['work', 'week']], ['today', 'Today', ['today', 'tasks', 'habits', 'agenda', 'mood']],
-  ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'portfolio', 'stocks']], ['fun', 'For fun', ['nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']]];
+  ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'portfolio', 'stocks']], ['fun', 'For fun', ['spotify', 'nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']]];
 // Pay, spending, bills and stocks live in the Money tab, so home shows a one-card summary by default.
 const LAYOUT_DEFAULT = () => ({ v: 2, sections: [], hidden: ['pay', 'spend', 'bills', 'stocks'], collapsed: [] });
 function layout() { if (!S.layout || S.layout.v !== 2) { S.layout = LAYOUT_DEFAULT(); resnap('layout'); } return S.layout; }
@@ -1974,6 +2065,16 @@ function viewSettings() {
     ${row('📈', 'Stocks', `<input class="inline" data-change="stocks" value="${esc(S.stocks || '')}" placeholder="SPY, AAPL" autocapitalize="characters" autocorrect="off" spellcheck="false">`)}
   </div>
 
+  <div class="settings-label">Spotify</div>
+  <div class="list">
+    ${SPT.rt ? `${row('🎧', 'Now playing on home', `<span class="toggle" style="margin-left:auto"><input type="checkbox" data-change="wSpotify" ${spOn() ? 'checked' : ''}><i></i></span>`)}
+      ${row('🔌', '<span style="color:var(--danger)">Disconnect Spotify</span>', '', 'spDisconnect')}` : `
+      <div class="pad muted" style="font-size:14px">One time: at developer.spotify.com, open your app (or create one with Web API checked), add the redirect URI below, save, then paste the Client ID here.</div>
+      ${row('↩️', 'Redirect URI', `<span class="v" style="font-size:13px">${esc(spRedirect())}</span>`, 'copyVal', `data-v="${esc(spRedirect())}"`)}
+      ${row('🔑', 'Client ID', `<input class="inline" data-change="spotifyId" value="${esc(S.spotifyId || '')}" placeholder="Paste it here" autocapitalize="off" autocorrect="off" spellcheck="false">`)}
+      <div class="pad"><button class="btn" data-a="spConnect">Connect Spotify</button></div>`}
+  </div>
+
   <div class="settings-label">Work schedule</div>
   <div class="list">
     ${row('💼', 'Status', `<span class="v">${S.calUrl ? (CAL.error ? 'Link not working' : `${(CAL.events || []).length} upcoming`) : !SY.vault ? 'Not set up yet' : CAL.at ? `${(CAL.events || []).length} shifts · sent ${ago(CAL.at).toLowerCase()}` : 'Waiting for your iPhone'}</span>`)}
@@ -2050,7 +2151,7 @@ function viewSettings() {
    RENDER / NAV
    ========================================================= */
 const VIEWS = { home: viewHome, tasks: viewTasks, habits: viewHabits, money: viewMoney, notes: viewNotes, settings: viewSettings };
-const SET_ICON = { 'Notifications': '🔔', 'Account': '👤', 'Cloud sync': '☁️', 'Profile': '👋', 'Appearance': '🎨', 'Home screen': '🏠', 'Home widgets': '🧩', 'Work schedule': '💼', 'Work & pay': '💵',
+const SET_ICON = { 'Notifications': '🔔', 'Account': '👤', 'Cloud sync': '☁️', 'Profile': '👋', 'Appearance': '🎨', 'Home screen': '🏠', 'Home widgets': '🧩', 'Spotify': '🎧', 'Work schedule': '💼', 'Work & pay': '💵',
   'Bills': '🧾', 'Weather': '🌤️', 'Focus & water': '⏱️', 'Quick links': '🔗', 'Countdowns': '⏳', 'Your data': '📦' };
 const setOpen = new Set();
 // Settings is a menu: each group's heading opens and closes its list.
@@ -2587,6 +2688,15 @@ const A = {
     if (!confirm('Sign out on this device? Your data stays here and in your account.')) return;
     SY = {}; saveSY(); syncStatus = 'off'; CAL = {}; render(); toast('Signed out');
   },
+  spConnect: () => spConnect(),
+  spDisconnect: () => spDisconnect(),
+  spPrev: () => spCtl('previous', 'POST'),
+  spNext: () => spCtl('next', 'POST'),
+  spToggle: () => {
+    const was = SP.playing; SP.pos = spPos(); SP.at = Date.now(); SP.playing = !was;
+    const el = $('#spotify'); if (el) el.outerHTML = spotifyCard();
+    spCtl(was ? 'pause' : 'play', 'PUT');
+  },
   copyVal: async el => { try { await navigator.clipboard.writeText(el.dataset.v); toast('Copied'); } catch { prompt('Copy this:', el.dataset.v); } },
   updateShifts: async () => {
     if (S.calUrl) return loadCal(true);
@@ -2772,6 +2882,8 @@ const CHANGES = {
   wAnime: el => { S.widgets.anime = el.checked; save(); },
   team: el => { S.team = el.value; save(); },
   stocks: el => { S.stocks = el.value; S.stocks = stockList().join(', '); el.value = S.stocks; save(); },
+  wSpotify: el => { S.widgets = { ...S.widgets, spotify: el.checked }; SP = {}; save(); },
+  spotifyId: el => { S.spotifyId = el.value.trim(); save(); },
   wPortfolio: el => { S.widgets = { ...S.widgets, portfolio: el.checked }; PF = {}; save(); },
   calUrl: el => {
     const v = el.value.trim();
@@ -2842,6 +2954,9 @@ if (location.hash.includes('id_token=') || location.hash.includes('error=')) {
   history.replaceState(null, '', location.pathname);
   if (h.get('id_token')) finishGoogle(h.get('id_token')); else toast('Google sign-in was cancelled');
 }
+// Returning from Spotify sign-in: ?code=…&state=… (or ?error=access_denied).
+{ const q = new URLSearchParams(location.search);
+  if (SPT.pending && (q.get('code') || q.get('error'))) { history.replaceState(null, '', location.pathname); q.get('code') ? spFinish(q.get('code'), q.get('state')) : (SPT = {}, spSave(), toast('Spotify sign-in was cancelled')); } }
 // Notification taps arrive as ?routine=am / ?go=tasks (new window) or a message (Dash already open).
 if (/[?&](routine|go)=/.test(location.search)) { const q = location.search; history.replaceState(null, '', location.pathname); setTimeout(() => openFromLink(q), 350); }
 navigator.serviceWorker?.addEventListener('message', e => { if (e.data && e.data.open) openFromLink(e.data.open); });

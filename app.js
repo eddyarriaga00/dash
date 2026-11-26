@@ -384,6 +384,7 @@ function buildReminders() {
       if (due.length) bits.push(`${due.length} task${due.length === 1 ? '' : 's'} due`);
       if (bills.length) bits.push(`${bills.map(b => b.name).join(', ')} due`);
       if (payday) bits.push('Payday 💵');
+      const am = N.habits ? routineList('am', day).length : 0; if (am) bits.push(`🌅 ${am} in your morning routine`);
       if (bits.length) add(atTime(day, N.morning), 'Today', bits.join(' · '), 'brief-' + day);
     }
     // Work: time to leave, and a heads-up the evening before
@@ -398,9 +399,14 @@ function buildReminders() {
     }
     // Habits: each habit's own reminder time, plus one evening nudge
     if (N.habits) {
-      for (const h of S.habits) if (h.remind && !(today && hOk(h)) && !(isWeekly(h) && weekMet(h))) add(atTime(day, h.remind), `${h.emoji} ${h.name}`, isWeekly(h) ? `${weekDone(h)}/${weekGoal(h)} this week` : 'Tap to check it off', 'habit-' + h.id + day);
-      const left = today ? S.habits.filter(h => !hOk(h)) : S.habits.filter(h => !isWeekly(h));
-      if (left.length) add(atTime(day, N.evening), today ? `${left.length} habit${left.length === 1 ? '' : 's'} left today` : 'Evening check-in', today ? left.slice(0, 4).map(h => h.name).join(', ') : 'Check off today’s habits', 'habits-' + day);
+      for (const h of S.habits) if (h.remind && hDue(h, day) && !hSkip(h, day) && !(today && hOk(h)) && !(isWeekly(h) && weekMet(h))) add(atTime(day, h.remind), `${h.emoji} ${h.name}`, isWeekly(h) ? `${weekDone(h)}/${weekGoal(h)} this week` : 'Tap to check it off', 'habit-' + h.id + day);
+      // The night note: your night routine, anything else still open, and a look at tomorrow's shift.
+      const night = routineList('pm', day).filter(h => !(today && hDone(h, day)));
+      const rest = today ? dueHabits(day).filter(h => !hOk(h) && (h.when || 'any') !== 'pm') : [];
+      const tmr = all.find(e => dkey(new Date(e.start)) === dkey(addDays(parseKey(day), 1)));
+      const tmrTxt = tmr && !N.work ? `Tomorrow: work ${tm(tmr.start)} – ${tm(tmr.end)}${fromPlace().mins ? `, leave ${tm(leaveAt(tmr.start))}` : ''}` : '';
+      if (night.length) add(atTime(day, N.evening), `🌙 Night routine · ${night.length}`, [night.slice(0, 4).map(h => h.name).join(', '), rest.length ? `+${rest.length} more left` : '', tmrTxt].filter(Boolean).join(' · '), 'habits-' + day);
+      else if (rest.length) add(atTime(day, N.evening), `${rest.length} habit${rest.length === 1 ? '' : 's'} left today`, [rest.slice(0, 4).map(h => h.name).join(', '), tmrTxt].filter(Boolean).join(' · '), 'habits-' + day);
     }
     // Tasks with a due date: a midday nudge on the day
     if (N.tasks && due.length) add(atTime(day, '13:00'), `${due.length} task${due.length === 1 ? '' : 's'} due today`, due.slice(0, 3).map(t => t.text).join(' · '), 'tasks-' + day);
@@ -563,7 +569,7 @@ function addTask(raw, defaultDue = '') {
 
 /* ---------- habits helpers ---------- */
 const hTarget = h => Math.max(1, h.target || 1);
-const hCount = (h, k) => { const v = h.log[k]; return v === true ? hTarget(h) : (v || 0); };
+const hCount = (h, k) => { const v = h.log[k]; return v === true ? hTarget(h) : Math.max(0, v || 0); };
 const hDone = (h, k = dkey()) => hCount(h, k) >= hTarget(h);
 const byWhen = (a, b) => 'am any pm'.indexOf(a.when || 'any') - 'am any pm'.indexOf(b.when || 'any');
 // Tap = one more; tapping a finished habit clears it. Past days toggle done/not done.
@@ -581,7 +587,11 @@ function streak(h) {
     return n;
   }
   let d = new Date(); if (!hDone(h, dkey(d))) d = addDays(d, -1);
-  let n = 0; while (hDone(h, dkey(d))) { n++; d = addDays(d, -1); }
+  let n = 0;
+  for (let i = 0; i < 400; i++, d = addDays(d, -1)) {
+    const k = dkey(d);
+    if (hDone(h, k)) n++; else if (!hDue(h, k) || hSkip(h, k)) continue; else break;
+  }
   return n;
 }
 function bestStreak(h) {
@@ -590,9 +600,12 @@ function bestStreak(h) {
     for (let i = 0; i < 53; i++, w = addDays(w, 7)) { cur = weekMet(h, w) ? cur + 1 : 0; best = Math.max(best, cur); }
     return best;
   }
-  const keys = Object.keys(h.log).filter(k => hDone(h, k)).sort();
-  let best = 0, cur = 0, prev = null;
-  for (const k of keys) { cur = prev && dayDiff(parseKey(prev), parseKey(k)) === 1 ? cur + 1 : 1; best = Math.max(best, cur); prev = k; }
+  const first = Object.keys(h.log).filter(k => hDone(h, k)).sort()[0]; if (!first) return 0;
+  let best = 0, cur = 0;
+  for (let d = parseKey(first), i = 0; dkey(d) <= dkey() && i < 800; d = addDays(d, 1), i++) {
+    const k = dkey(d);
+    if (hDone(h, k)) best = Math.max(best, ++cur); else if (!hDue(h, k) || hSkip(h, k) || k === dkey()) continue; else cur = 0;
+  }
   return best;
 }
 // Habits can be daily, or "N times a week" (Sun–Sat weeks).
@@ -602,13 +615,68 @@ const weekDone = (h, ref = new Date()) => { const a = weekStart(ref); let n = 0;
 const weekMet = (h, ref = new Date()) => weekDone(h, ref) >= weekGoal(h);
 // "Settled for today": a daily habit done today, or a weekly habit done today / already at its goal this week.
 const hOk = h => isWeekly(h) ? hDone(h) || weekMet(h) : hDone(h);
+/* Which days a habit is for. Work-day habits ("pack lunch") and day-off habits ("gym") only show up,
+   count and remind on those days, so the list each day is only what actually applies. */
+const HDAYS = { '': 'Every day', work: 'Work days', off: 'Days off', wkdy: 'Weekdays', wknd: 'Weekends' };
+let wdCache = { t: 0, s: null };
+function workDays() {
+  if (wdCache.s && Date.now() - wdCache.t < 3000) return wdCache.s;
+  const set = new Set();
+  for (const e of [...shifts(), ...manualShifts()]) if (!e.allDay) set.add(dkey(new Date(e.start)));
+  for (const k in S.shiftLog || {}) set.add(dkey(new Date(k)));
+  wdCache = { t: Date.now(), s: set }; return set;
+}
+function hDue(h, k = dkey()) {
+  const d = h.days || ''; if (!d || isWeekly(h)) return true;
+  const wd = parseKey(k).getDay();
+  if (d === 'wkdy') return wd > 0 && wd < 6;
+  if (d === 'wknd') return wd === 0 || wd === 6;
+  return workDays().has(k) === (d === 'work');
+}
+// A skipped day (-1 in the log) is neither done nor missed: it doesn't break a streak.
+const hSkip = (h, k = dkey()) => h.log[k] === -1;
+const dueHabits = (k = dkey()) => S.habits.filter(h => hDue(h, k) && !hSkip(h, k));
 // Habit strength (like Loop Habit Tracker): a slow average of recent days, so one missed day barely dents it.
 function strength(h) {
   const f = isWeekly(h) ? weekGoal(h) / 7 : 1, a = 0.06; let x = 0;
-  for (let i = 89; i >= 0; i--) { const k = dkey(addDays(new Date(), -i)); if (i === 0 && !hDone(h, k)) break; x = (1 - a) * x + a * (hDone(h, k) ? 1 : 0); }
+  for (let i = 89; i >= 0; i--) { const k = dkey(addDays(new Date(), -i)); if (i === 0 && !hDone(h, k)) break; if (!isWeekly(h) && (!hDue(h, k) || hSkip(h, k))) continue; x = (1 - a) * x + a * (hDone(h, k) ? 1 : 0); }
   return Math.min(100, Math.round(x / f * 100));
 }
-const rate = (h, days = 30) => { let n = 0; for (let i = 0; i < days; i++) if (hDone(h, dkey(addDays(new Date(), -i)))) n++; return Math.round(n / days * 100); };
+const rate = (h, days = 30) => { let n = 0, of = 0; for (let i = 0; i < days; i++) { const k = dkey(addDays(new Date(), -i)); if (hDone(h, k)) { n++; of++; } else if (hDue(h, k) && !hSkip(h, k) && i) of++; } return of ? Math.round(n / of * 100) : 0; };
+
+/* ---------- routines: your morning and night habits as one list, done in one tap ---------- */
+const ROUT = { am: ['🌅', 'Morning routine'], pm: ['🌙', 'Night routine'] };
+const routineList = (w, k = dkey()) => dueHabits(k).filter(h => !isWeekly(h) && (h.when || 'any') === w);
+const routineNow = () => { const h = new Date().getHours(); return h >= 4 && h < 12 ? 'am' : h >= 17 ? 'pm' : ''; };
+function routineRows(w) {
+  const k = dkey();
+  return routineList(w).sort((a, b) => hDone(a, k) - hDone(b, k) || byWhen(a, b)).map(h => `<button class="rt-row ${hDone(h, k) ? 'on' : ''}" data-a="toggleHabit" data-id="${h.id}" data-day="${k}">
+    <span class="e">${h.emoji}</span><span class="n">${esc(h.name)}${hTarget(h) > 1 ? ` <small>${hCount(h, k)}/${hTarget(h)}</small>` : ''}</span><i class="rt-check">${I.check}</i></button>`).join('');
+}
+function routineCard() {
+  const w = routineNow(); if (!w) return '';
+  const k = dkey(), list = routineList(w); if (!list.length) return '';
+  const left = list.filter(h => !hDone(h, k)), [ic, name] = ROUT[w];
+  if (!left.length) return `<section class="card routine done" id="routine"><div class="rt-done"><span>${ic} ${name} done ✓</span><button class="link-btn" data-a="openRoutine" data-w="${w}">View</button></div></section>`;
+  return `<section class="card routine" id="routine">${secHead(`${ic} ${name}`, `<span class="muted" style="font-size:14px;font-weight:650">${list.length - left.length}/${list.length}</span>`)}
+    <div class="rt-list">${routineRows(w)}</div>
+    <button class="btn rt-all" data-a="routineAll" data-w="${w}">✓ Did it all</button></section>`;
+}
+function routineSheet(w) {
+  if (!ROUT[w] || !routineList(w).length) return;
+  const [ic, name] = ROUT[w], k = dkey(), extra = dueHabits().filter(h => !hOk(h) && !routineList(w).includes(h));
+  openSheet(`<div class="sheet-head"><div class="sheet-title" style="margin:0">${ic} ${name}</div><div class="spacer"></div><button class="ghost" data-a="closeSheet">Done</button></div>
+    <div class="rt-list" id="rt-sheet" data-w="${w}">${routineRows(w)}</div>
+    <button class="btn rt-all" data-a="routineAll" data-w="${w}">✓ Did it all</button>
+    ${extra.length ? `<label class="label">Also left today</label><div class="chip-row">${extra.map(h => `<button class="habit-chip" data-a="toggleHabit" data-id="${h.id}" data-day="${k}"><span>${h.emoji}</span>${esc(h.name)}</button>`).join('')}</div>` : ''}
+    <p class="muted" style="font-size:13px;margin-top:14px">Not doing one today? Open it from the Habits tab and tap Skip today — your streak stays.</p>`);
+}
+// Notifications and home-screen links open straight to what they're about.
+function openFromLink(q) {
+  const p = new URLSearchParams(q), r = p.get('routine'), t = p.get('go');
+  if (r) { if (S.tab !== 'home') go('home'); setTimeout(() => routineSheet(r), 300); }
+  else if (t && VIEWS[t]) go(t);
+}
 
 /* ---------- countdown helpers ---------- */
 function nextDate(c) {
@@ -850,6 +918,8 @@ async function loadCal(force) {
     } else {
       const [row] = await rpc('dash_shifts', { vault: SY.vault });
       CAL = { url: src, ts: Date.now(), events: keep(parseShiftLines(row?.lines)), at: row?.at ? Date.parse(row.at) : 0, error: false };
+      // UKG Pro's "Sync My Schedule" calendar is called "ESS Schedule" and its events start with "ESS": pick it for you.
+      if (!shiftCals().includes(S.workCal)) { const c = shiftCals().find(x => /ess schedule|ukg|kronos/i.test(x)) || CAL.events.find(e => /^ESS\b/.test(e.title || ''))?.cal; if (c) { S.workCal = c; save(); } }
       if (force) toast(CAL.at ? `Shifts updated ${ago(CAL.at).toLowerCase()}` : 'Nothing received from your iPhone yet');
     }
   } catch {
@@ -872,7 +942,20 @@ function calShifts() {
   if (!calSrc() || CAL.url !== calSrc()) return [];
   const cals = S.calUrl ? [] : shiftCals(), pick = cals.includes(S.workCal);
   if (cals.length > 1 && !pick) return [];
-  return (CAL.events || []).filter(e => !pick || e.cal === S.workCal);
+  return joinSegments((CAL.events || []).filter(e => !pick || e.cal === S.workCal));
+}
+// UKG (and similar schedulers) send each part of a shift, and its break, as separate events.
+// Parts that touch (within 30 minutes) on the same day become one shift.
+function joinSegments(list) {
+  const out = [];
+  for (const e of [...list].sort((a, b) => a.start - b.start)) {
+    const p = out[out.length - 1], title = (e.title || '').replace(/^ESS\s*-\s*/i, '').trim();
+    if (p && !e.allDay && !p.allDay && e.start - (p.end || p.start) <= 30 * 6e4 && dkey(new Date(e.start)) === dkey(new Date(p.start))) {
+      p.end = Math.max(p.end || p.start, e.end || e.start);
+      if (/^(break|meal)/i.test(p.title || '') && !/^(break|meal)/i.test(title)) p.title = title;
+    } else out.push({ ...e, title });
+  }
+  return out;
 }
 // Work shifts from today onward: the calendar's, plus hand-entered ones on days the calendar has nothing.
 function shifts() {
@@ -1317,8 +1400,8 @@ function viewHome() {
   const now = new Date(), h = now.getHours(), t = dkey();
   const greet = h < 5 ? 'Up late' : h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : h < 22 ? 'Good evening' : 'Good night';
   const tt = todayTasks();
-  const nDone = S.habits.filter(hOk).length;
-  const total = tt.total + S.habits.length, done = tt.done.length + nDone;
+  const dueH = dueHabits(), nDone = dueH.filter(hOk).length;
+  const total = tt.total + dueH.length, done = tt.done.length + nDone;
   const pct = total ? done / total : 0;
   const sessions = S.focus.sessions[t] || 0;
 
@@ -1339,6 +1422,7 @@ function viewHome() {
   ${!S.hideInstall && !isStandalone() ? `<div class="banner"><span style="font-size:24px">📲</span><div><b>Add to Home Screen</b>${isIOS() ? 'Tap Share, then “Add to Home Screen”.' : 'Use your browser menu → Install app.'}</div><button class="x" data-a="hideInstall" aria-label="Dismiss">${I.x}</button></div>` : ''}`;
   const P = {
     weather: () => weatherCard(),
+    routine: () => routineCard(),
     work: () => (drawn.work = workCard()),
     week: () => weekCard() || '<span id="week" hidden></span>',
     pay: () => payCard(),
@@ -1354,7 +1438,7 @@ function viewHome() {
       <div class="ring-wrap">${ring(pct)}<div class="ring-label"><div>${Math.round(pct * 100)}%<small>today</small></div></div></div>
       <div class="today-stats">
         <div class="ts"><span class="dot"></span>Tasks<b>${tt.done.length}/${tt.total}</b></div>
-        <div class="ts"><span class="dot" style="background:#ff8a3d"></span>Habits<b>${nDone}/${S.habits.length}</b></div>
+        <div class="ts"><span class="dot" style="background:#ff8a3d"></span>Habits<b>${nDone}/${dueH.length}</b></div>
         <div class="ts"><span class="dot" style="background:#4aa8ff"></span>Focus<b>${sessions} ${sessions === 1 ? 'session' : 'sessions'}</b></div>
       </div>
     </div>
@@ -1365,9 +1449,9 @@ function viewHome() {
     ${upNext.length ? `<div class="task-list">${upNext.map(taskRow).join('')}</div>`
       : `<div class="empty"><div class="big">✨</div><b>All clear</b>Nothing on your plate.</div>`}
   </section>`,
-    habits: () => S.habits.length ? `<section class="card">
-    ${secHead('Habits', `<button class="link-btn" data-a="tab" data-tab="habits">${nDone}/${S.habits.length}</button>`)}
-    <div class="chip-row">${[...S.habits].sort((a, b) => hDone(a, t) - hDone(b, t) || byWhen(a, b)).map(x => `<button class="habit-chip ${hDone(x, t) ? 'on' : ''}" data-a="toggleHabit" data-id="${x.id}" data-day="${t}"><span>${x.emoji}</span>${esc(x.name)}${hTarget(x) > 1 ? `<small>${hCount(x, t)}/${hTarget(x)}</small>` : ''}</button>`).join('')}</div>
+    habits: () => dueH.length ? `<section class="card">
+    ${secHead('Habits', `<button class="link-btn" data-a="tab" data-tab="habits">${nDone}/${dueH.length}</button>`)}
+    <div class="chip-row">${[...dueH].sort((a, b) => hDone(a, t) - hDone(b, t) || byWhen(a, b)).map(x => `<button class="habit-chip ${hDone(x, t) ? 'on' : ''}" data-a="toggleHabit" data-id="${x.id}" data-day="${t}"><span>${x.emoji}</span>${esc(x.name)}${hTarget(x) > 1 ? `<small>${hCount(x, t)}/${hTarget(x)}</small>` : ''}</button>`).join('')}</div>
   </section>` : '',
     links: () => `<section class="card">
     ${secHead('Quick links', `<button class="link-btn" data-a="goSettings">Edit</button>`)}
@@ -1424,7 +1508,7 @@ function brief() {
   if (sh && dkey(new Date(sh.start)) === dkey()) out.push(['home', sh.start <= now ? `💼 On shift till ${tm(sh.end)}` : `💼 Work ${tm(sh.start)}${fromPlace().mins ? ` · leave ${tm(leaveAt(sh.start))}` : ''}`]);
   else if (all.length) out.push(['home', '🏖️ No shift today']);
   const due = todayTasks().open.length; if (due) out.push(['tasks', `✅ ${due} task${due === 1 ? '' : 's'} due`]);
-  if (S.habits.length) { const left = S.habits.filter(h => !hOk(h)).length; out.push(['habits', left ? `🔥 ${left} habit${left === 1 ? '' : 's'} left` : '🔥 Habits done']); }
+  const dh = dueHabits(); if (dh.length) { const left = dh.filter(h => !hOk(h)).length; out.push(['habits', left ? `🔥 ${left} habit${left === 1 ? '' : 's'} left` : '🔥 Habits done']); }
   const bill = (S.bills || []).map(b => ({ b, d: billDue(b).days })).filter(x => x.d <= 3).sort((x, y) => x.d - y.d)[0];
   if (bill) out.push(['money', `🧾 ${esc(bill.b.name)} ${bill.d < 0 ? 'overdue' : bill.d === 0 ? 'due today' : `due in ${bill.d}d`}`]);
   const pd = nextPayday(); if (pd && dayDiff(new Date(), pd) <= 2) out.push(['money', `💵 Payday ${dayDiff(new Date(), pd) === 0 ? 'today' : dayDiff(new Date(), pd) === 1 ? 'tomorrow' : 'in 2d'}`]);
@@ -1490,9 +1574,9 @@ function searchResults(q) {
 }
 
 /* ---------- home layout: sections you can collapse, reorder, and hide cards in ---------- */
-const CARD_LABEL = { weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
+const CARD_LABEL = { routine: '🌅 Morning & night routine', weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
   moneySum: '💳 Money summary', pay: '💵 Pay estimate', spend: '💸 Spending', bills: '🧾 Bills', stocks: '📈 Watchlist', nba: '🏀 NBA', anime: '📺 Anime', links: '🔗 Quick links', tools: '⏱️ Focus & water', countdowns: '⏳ Countdowns' };
-const SECTIONS = [['top', '', ['weather']], ['work', 'Work', ['work', 'week']], ['today', 'Today', ['today', 'tasks', 'habits', 'agenda', 'mood']],
+const SECTIONS = [['top', '', ['routine', 'weather']], ['work', 'Work', ['work', 'week']], ['today', 'Today', ['today', 'tasks', 'habits', 'agenda', 'mood']],
   ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'stocks']], ['fun', 'For fun', ['nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']]];
 // Pay, spending, bills and stocks live in the Money tab, so home shows a one-card summary by default.
 const LAYOUT_DEFAULT = () => ({ v: 2, sections: [], hidden: ['pay', 'spend', 'bills', 'stocks'], collapsed: [] });
@@ -1679,9 +1763,9 @@ function viewTasks() {
 function viewHabits() {
   const t = new Date(), tk = dkey();
   const week = Array.from({ length: 7 }, (_, i) => addDays(t, i - 6));
-  const nDone = S.habits.filter(hOk).length;
-  let wk = 0; S.habits.forEach(h => week.forEach(d => { if (hDone(h, dkey(d))) wk++; }));
-  const wkPct = S.habits.length ? Math.round(wk / (S.habits.length * 7) * 100) : 0;
+  const dueT = dueHabits(tk), nDone = dueT.filter(hOk).length;
+  let wk = 0, wkOf = 0; S.habits.forEach(h => week.forEach(d => { const k = dkey(d); if (hDone(h, k)) { wk++; wkOf++; } else if (hDue(h, k) && !hSkip(h, k) && k !== tk) wkOf++; }));
+  const wkPct = wkOf ? Math.round(wk / wkOf * 100) : 0;
   const card = h => {
     const s = streak(h), tg = hTarget(h), c = hCount(h, tk), done = c >= tg;
     return `<section class="card habit ${done ? 'is-done' : ''}">
@@ -1697,16 +1781,18 @@ function viewHabits() {
   };
   const todo = (a, b) => hOk(a) - hOk(b) || (a.remind || '99').localeCompare(b.remind || '99');
   const group = (label, list) => list.length ? `<div class="group-label">${label} <span class="muted" style="font-weight:600">· ${list.filter(hOk).length}/${list.length}</span></div>${[...list].sort(todo).map(card).join('')}` : '';
-  const daily = S.habits.filter(h => !isWeekly(h));
-  const groups = Object.entries(WHEN).map(([k, [label, icon]]) => group(`${icon} ${label}`, daily.filter(h => (h.when || 'any') === k))).join('')
-    + group('📆 Weekly goals', S.habits.filter(isWeekly));
+  const daily = dueT.filter(h => !isWeekly(h)), notToday = S.habits.filter(h => !dueT.includes(h));
+  const groups = Object.entries(WHEN).map(([k, [label, icon]]) => group(`${icon} ${label}`, daily.filter(h => (h.when || 'any') === k))
+      + (ROUT[k] && daily.some(h => (h.when || 'any') === k && !hDone(h, tk)) ? `<button class="chip rt-mini" data-a="routineAll" data-w="${k}">✓ Mark all ${label.toLowerCase()} done</button>` : '')).join('')
+    + group('📆 Weekly goals', dueT.filter(isWeekly))
+    + (notToday.length ? `<div class="group-label">😌 Not today</div><div class="chip-row" style="margin-top:0">${notToday.map(h => `<button class="habit-chip" data-a="habitDetail" data-id="${h.id}"><span>${h.emoji}</span>${esc(h.name)}<small>${hSkip(h, tk) ? 'skipped' : HDAYS[h.days || ''].toLowerCase()}</small></button>`).join('')}</div>` : '');
   const have = new Set(S.habits.map(h => h.name.toLowerCase()));
   const ideas = HABIT_IDEAS.map((x, i) => [x, i]).filter(([x]) => !have.has(x[1].toLowerCase()));
   return `
   <header class="page-head"><h1>Habits</h1><div class="spacer"></div><button class="icon-btn on" data-a="addHabit" aria-label="New habit">${I.plus}</button></header>
   ${S.habits.length ? `<section class="card"><div class="today">
-    <div class="ring-wrap">${ring(S.habits.length ? nDone / S.habits.length : 0, 72, 8)}<div class="ring-label"><div style="font-size:16px">${nDone}/${S.habits.length}</div></div></div>
-    <div class="today-stats"><div class="ts">${nDone === S.habits.length ? 'All done today 🎉' : 'Left today'}<b>${nDone === S.habits.length ? '' : S.habits.length - nDone}</b></div><div class="ts">Last 7 days<b>${wkPct}%</b></div><div class="ts">Longest streak<b>${Math.max(0, ...S.habits.map(streak))} 🔥</b></div></div>
+    <div class="ring-wrap">${ring(dueT.length ? nDone / dueT.length : 1, 72, 8)}<div class="ring-label"><div style="font-size:16px">${nDone}/${dueT.length}</div></div></div>
+    <div class="today-stats"><div class="ts">${nDone === dueT.length ? 'All done today 🎉' : 'Left today'}<b>${nDone === dueT.length ? '' : dueT.length - nDone}</b></div><div class="ts">Last 7 days<b>${wkPct}%</b></div><div class="ts">Longest streak<b>${Math.max(0, ...S.habits.map(streak))} 🔥</b></div></div>
   </div></section>` : `<div class="empty card"><div class="big">🌱</div><b>No habits yet</b>Pick a few below or tap + to make your own.</div>`}
   ${groups}
   ${ideas.length ? `<div class="group-label">✨ Quick add</div>
@@ -1820,6 +1906,7 @@ function viewSettings() {
     ${row('2️⃣', 'Update shifts', `<span class="v">${I.chev}</span>`, 'updateShifts')}
     ${!S.calUrl && shiftCals().length > 1 ? `<div class="pad"><div class="muted" style="font-size:13px;margin-bottom:8px">Calendar with your shifts</div><div class="chips">${shiftCals().map(c => `<button class="chip ${S.workCal === c ? 'on' : ''}" data-a="setWorkCal" data-v="${esc(c)}">${esc(c)}</button>`).join('')}</div></div>` : ''}
     <div class="pad muted" style="font-size:13px">Tap 1 on your iPhone, tap <b>Download</b>, then open the downloaded file and tap <b>Add Shortcut</b>. After that, tap 2 whenever you want fresh shifts. The first run asks to allow Calendar access.</div>
+    <div class="pad muted" style="font-size:13px"><b>Schedule in UKG Pro?</b> First send it to your iPhone calendar: in the UKG app open <b>Main Menu → Edit Profile → Sync My Schedule</b>, tick <b>Shifts</b>, tap <b>Save</b>, then <b>Subscribe</b> and pick <b>Apple Calendar</b>. A calendar called “ESS Schedule” appears; then tap 2 above. Dash picks that calendar and joins split shifts and breaks into one shift. If your UKG doesn’t show Sync My Schedule, use 📷 screenshots from + Shift instead.</div>
     <div class="pad" style="padding-bottom:8px"><input class="input" data-change="calUrl" value="${esc(S.calUrl || '')}" placeholder="Or paste a public calendar link" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
     <div class="pad muted" style="font-size:13px;padding-top:0">Only for normal calendar feeds (school, Google, iCloud). Leave empty to use the shortcut.</div>
   </div>
@@ -2022,6 +2109,9 @@ function habitSheet(h) {
     <label class="label">How often</label>
     <div class="chips" data-group="freq">${[['d', 'Every day'], ...[1, 2, 3, 4, 5, 6].map(n => ['w' + n, n + '× a week'])].map(([v, l]) => `<button type="button" class="chip ${(isWeekly(h) ? 'w' + weekGoal(h) : 'd') === v ? 'on' : ''}" data-a="pickChip" data-v="${v}">${l}</button>`).join('')}</div>
     <input type="hidden" name="freq" value="${isWeekly(h) ? 'w' + weekGoal(h) : 'd'}">
+    <label class="label">Which days</label>
+    <div class="chips" data-group="days">${Object.entries(HDAYS).map(([v, l]) => `<button type="button" class="chip ${(h.days || '') === v ? 'on' : ''}" data-a="pickChip" data-v="${v}">${l}</button>`).join('')}</div>
+    <input type="hidden" name="days" value="${h.days || ''}">
     <label class="label">Times per day</label>
     <div class="chips" data-group="target">${[1, 2, 3, 4].map(n => `<button type="button" class="chip ${hTarget(h) === n ? 'on' : ''}" data-a="pickChip" data-v="${n}">${n}×</button>`).join('')}</div>
     <input type="hidden" name="target" value="${hTarget(h)}">
@@ -2038,7 +2128,7 @@ function habitDetail(h) {
   const cells = []; for (let d = start; dkey(d) <= dkey(end); d = addDays(d, 1)) { const k = dkey(d); cells.push(`<i class="${hDone(h, k) ? 'on' : hCount(h, k) ? 'part' : ''} ${k === dkey() ? 't' : ''}" title="${k}"></i>`); }
   openSheet(`
     <div class="habit-top" style="margin-bottom:16px"><div class="habit-emoji" style="width:52px;height:52px;font-size:26px">${h.emoji}</div>
-      <div><div class="sheet-title" style="margin:0">${esc(h.name)}</div><div class="habit-sub">${isWeekly(h) ? `${weekGoal(h)}× a week · ` : ''}Since ${Object.keys(h.log).filter(k => hCount(h, k)).sort()[0] ? fmtDate(Object.keys(h.log).filter(k => hCount(h, k)).sort()[0]) : 'today'} · best ${bestStreak(h)}${isWeekly(h) ? ' wk' : ''}</div></div></div>
+      <div><div class="sheet-title" style="margin:0">${esc(h.name)}</div><div class="habit-sub">${isWeekly(h) ? `${weekGoal(h)}× a week · ` : h.days ? HDAYS[h.days] + ' · ' : ''}Since ${Object.keys(h.log).filter(k => hCount(h, k)).sort()[0] ? fmtDate(Object.keys(h.log).filter(k => hCount(h, k)).sort()[0]) : 'today'} · best ${bestStreak(h)}${isWeekly(h) ? ' wk' : ''}</div></div></div>
     <div class="stat-grid">
       <div class="stat"><small>Strength</small><b>${strength(h)}%</b></div>
       <div class="stat"><small>Streak</small><b>${streak(h)}${isWeekly(h) ? ' wk' : ''} 🔥</b></div>
@@ -2047,6 +2137,7 @@ function habitDetail(h) {
     <label class="label" style="margin-top:4px">Last ${weeks} weeks</label>
     <div class="heat">${cells.join('')}</div>
     <div class="btn-row">
+      ${hDone(h) ? '' : `<button class="btn secondary" data-a="skipHabit" data-id="${h.id}">${hSkip(h) ? 'Undo skip' : 'Skip today (keeps your streak)'}</button>`}
       <button class="btn secondary" data-a="editHabit" data-id="${h.id}">Edit</button>
       <button class="btn danger" data-a="deleteHabit" data-id="${h.id}">Delete habit</button>
     </div>`);
@@ -2280,15 +2371,27 @@ const A = {
     const h = byId('habits', el.dataset.id), k = el.dataset.day; if (!h) return;
     const done = bumpHabit(h, k); if (hCount(h, k)) navigator.vibrate?.(10);
     save(); el.classList.toggle('on', done);
-    const left = S.habits.filter(x => !hOk(x)).length;
+    const left = dueHabits().filter(x => !hOk(x)).length;
     if (done && k === dkey() && !left && S.habits.length > 1) toast('Every habit done today 🎉');
-    setTimeout(() => render(), 200);
+    setTimeout(() => { render(); const rs = $('#rt-sheet'); if (rs) rs.innerHTML = routineRows(rs.dataset.w); }, 200);
   },
   addIdea: el => {
     const [emoji, name, when, target, wk] = HABIT_IDEAS[+el.dataset.i];
     S.habits.push({ id: uid(), name, emoji, when, target, ...(wk ? { per: 'week', weekGoal: wk } : {}), log: {} }); save(); render(); toast(`Added ${emoji} ${name}`);
   },
   addHabit: () => habitSheet(),
+  openRoutine: el => routineSheet(el.dataset.w),
+  routineAll: el => {
+    const w = el.dataset.w, k = dkey(), prev = {};
+    for (const h of routineList(w)) if (!hDone(h, k)) { prev[h.id] = h.log[k]; h.log[k] = hTarget(h); }
+    if (!Object.keys(prev).length) return;
+    save(); navigator.vibrate?.(15); closeSheet(); render();
+    toast(`${ROUT[w][1]} done ✓`, () => { for (const [id, v] of Object.entries(prev)) { const h = byId('habits', id); if (h) h.log[k] = v === undefined ? 0 : v; } save(); render(); });
+  },
+  skipHabit: el => {
+    const h = byId('habits', el.dataset.id); if (!h) return; const k = dkey();
+    h.log[k] = hSkip(h, k) ? 0 : -1; save(); closeSheet(); render(); toast(hSkip(h, k) ? 'Skipped today — streak kept' : 'Back on for today');
+  },
   editHabit: el => habitSheet(byId('habits', el.dataset.id)),
   habitDetail: el => habitDetail(byId('habits', el.dataset.id)),
   deleteHabit: el => removeWithUndo('habits', el.dataset.id, 'Habit'),
@@ -2475,7 +2578,7 @@ const FORMS = {
   habit: f => {
     const d = Object.fromEntries(new FormData(f)), id = f.dataset.id;
     const wk = /^w[1-6]$/.test(d.freq || '');
-    const v = { name: d.name.trim(), emoji: d.emoji || '✅', when: d.when, target: +d.target || 1, per: wk ? 'week' : 'day', weekGoal: wk ? +d.freq.slice(1) : undefined, remind: d.remind || '' };
+    const v = { name: d.name.trim(), emoji: d.emoji || '✅', when: d.when, target: +d.target || 1, per: wk ? 'week' : 'day', weekGoal: wk ? +d.freq.slice(1) : undefined, remind: d.remind || '', days: HDAYS[d.days] ? d.days : '' };
     if (id) Object.assign(byId('habits', id), v); else S.habits.push({ id: uid(), ...v, log: {} });
     save(); closeSheet(); render();
   },
@@ -2610,6 +2713,9 @@ if (location.hash.includes('id_token=') || location.hash.includes('error=')) {
   history.replaceState(null, '', location.pathname);
   if (h.get('id_token')) finishGoogle(h.get('id_token')); else toast('Google sign-in was cancelled');
 }
+// Notification taps arrive as ?routine=am / ?go=tasks (new window) or a message (Dash already open).
+if (/[?&](routine|go)=/.test(location.search)) { const q = location.search; history.replaceState(null, '', location.pathname); setTimeout(() => openFromLink(q), 350); }
+navigator.serviceWorker?.addEventListener('message', e => { if (e.data && e.data.open) openFromLink(e.data.open); });
 // Home-screen shortcuts: ?add=task / ?add=note
 const addParam = new URLSearchParams(location.search).get('add');
 if (addParam) { history.replaceState(null, '', location.pathname); setTimeout(() => addParam === 'note' ? noteSheet() : quickAddSheet(), 350); }

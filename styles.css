@@ -705,3 +705,20 @@ i.d-event { background: #5ac8fa !important; } i.d-task { background: var(--dange
 .tip.late { background: color-mix(in srgb, var(--danger) 24%, transparent); color: var(--text); }
 .link-btn.more { display: block; margin: 10px auto 0; font-size: 14px; }
 .cal-row small { white-space: normal; }
+
+/* morning / night routine */
+.rt-list { display: grid; gap: 8px; }
+.rt-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; border-radius: 16px; background: var(--surface-2); text-align: left; color: var(--text); border: 1.5px solid transparent; transition: background .2s, opacity .2s; }
+.rt-row:active { transform: scale(.98); }
+.rt-row .e { font-size: 22px; line-height: 1; }
+.rt-row .n { flex: 1; font-size: 16px; font-weight: 600; }
+.rt-row .n small { color: var(--muted); font-weight: 700; font-size: 12.5px; }
+.rt-check { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--faint); display: grid; place-items: center; color: transparent; flex: none; }
+.rt-check svg.i { width: 15px; height: 15px; stroke-width: 3.2; }
+.rt-row.on { opacity: .6; }
+.rt-row.on .n { text-decoration: line-through; }
+.rt-row.on .rt-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+.rt-all { width: 100%; margin-top: 12px; }
+.routine.done { padding-top: 14px; padding-bottom: 14px; }
+.rt-done { display: flex; align-items: center; justify-content: space-between; font-weight: 650; }
+.rt-mini { margin: 8px 0 4px; font-size: 13px; }

@@ -1,5 +1,5 @@
 // Bump VERSION whenever you deploy changes so phones pick up the new files.
-const VERSION = 'dash-v22';
+const VERSION = 'dash-v23';
 const ASSETS = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png'
@@ -57,5 +57,11 @@ self.addEventListener('push', e => {
 });
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => (cs[0] ? cs[0].focus() : self.clients.openWindow('./'))));
+  // Open Dash on what the notification is about: the morning brief and night note open that routine.
+  const t = e.notification.tag || '', go = t.startsWith('brief-') ? 'routine=am' : t.startsWith('habits-') ? 'routine=pm'
+    : t.startsWith('habit-') ? 'go=habits' : t.startsWith('tasks-') ? 'go=tasks' : t.startsWith('bill-') ? 'go=money' : 'go=home';
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
+    if (!cs[0]) return self.clients.openWindow('./?' + go);
+    cs[0].postMessage({ open: '?' + go }); return cs[0].focus();
+  }));
 });

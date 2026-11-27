@@ -422,7 +422,7 @@ function sleepPlan(now = Date.now()) {
 }
 const hmin = ms => { const m = Math.max(0, Math.round(ms / 6e4)), h = Math.floor(m / 60); return h ? `${h}h${m % 60 ? ' ' + (m % 60) + 'm' : ''}` : `${m}m`; };
 const RELEASES = [
-  ['2026-12-02', '🎧', 'Spotify Wrapped', 'Usually early December'], ['2026-12-10', '🏆', 'The Game Awards', 'Games'],
+  ['2026-12-02', '🎧', 'Spotify Wrapped', 'Music · date expected'], ['2026-12-10', '🏆', 'The Game Awards', 'Games'],
   ['2026-12-11', '🎬', 'Jumanji 3', 'Movie'], ['2026-12-18', '🎬', 'Avengers: Doomsday', 'Movie'], ['2026-12-18', '🎬', 'Dune: Part Three', 'Movie'],
   ['2027-01-07', '🎌', 'Ichibancon', 'Concord · thru Jan 10'], ['2027-01-15', '🎬', 'Children of Blood and Bone', 'Movie'],
   ['2027-01-16', '🏈', 'NFL Wild Card weekend', 'Playoffs start'], ['2027-01-16', '🎌', 'Madoka Magica: Walpurgisnacht Rising', 'In theaters thru Jan 19'],
@@ -441,9 +441,9 @@ function releasesCard() {
   const t = dkey(), have = new Set(S.countdowns.map(c => c.title.toLowerCase()));
   const up = RELEASES.filter(r => r[0] >= t).slice(0, 5);
   if (!up.length) return '<span id="releases" hidden></span>';
-  const when = k => { const n = dayDiff(new Date(), parseKey(k)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : n < 14 ? `${n} days` : parseKey(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+  const when = k => { const n = dayDiff(new Date(), parseKey(k)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : n < 60 ? `${n}d` : `${Math.round(n / 7)}w`; };
   return `<section class="card" id="releases">${secHead('🍿 Coming soon')}
-    <div class="rel-list">${up.map(([k, ic, title, sub]) => `<div class="rel"><span class="rel-ic">${ic}</span><span class="rel-t"><b>${esc(title)}</b><small>${esc(sub)}</small></span><span class="rel-d">${when(k)}</span>
+    <div class="rel-list">${up.map(([k, ic, title, sub]) => `<div class="rel"><span class="rel-ic">${ic}</span><span class="rel-t"><b>${esc(title)}</b><small>${parseKey(k).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · ${esc(sub)}</small></span><span class="rel-d">${when(k)}</span>
       ${have.has(title.toLowerCase()) ? '<span class="rel-add on" aria-label="Countdown added">✓</span>' : `<button class="rel-add" data-a="relCountdown" data-k="${k}" data-t="${esc(title)}" data-e="${ic}" aria-label="Add a countdown for ${esc(title)}">+</button>`}</div>`).join('')}</div>
   </section>`;
 }
@@ -457,12 +457,19 @@ function sleepCard() {
     : `<b>Get to bed now</b><span>${left > 0 ? `You’d still get about ${hmin(left)}` : 'Your wake-up is close'}</span>`;
   const why = p.shift ? `Up at <b>${tm(p.at)}</b> for your ${tm(p.shift.start)} shift · ${S.commute || 0} min drive + ${c.ready} min to get ready`
     : `Up at <b>${tm(p.at)}</b> ${dayDiff(new Date(now), parseKey(p.day)) === 0 ? 'today' : 'tomorrow'}`;
-  const nowWake = [7, 8, 9].map(h => tm(now + h * 36e5 + (+c.buffer || 0) * 6e4));
+  const nowWake = [7, 8, 9].map(h => ({ h, at: now + h * 36e5 + (+c.buffer || 0) * 6e4 }));
+  const late = !pick, bar = late ? '' : (() => {
+    // A night timeline: the three bedtimes and your wake-up, with "now" marked
+    const a = Math.min(now, p.beds[0].at) - 30 * 6e4, z = p.at, x = t => Math.max(0, Math.min(100, (t - a) / (z - a) * 100)).toFixed(1);
+    return `<div class="sl-bar" aria-hidden="true"><i style="left:${x(pick.at)}%;right:${(100 - x(p.at)).toFixed(1)}%"></i>${now > a ? `<b style="left:${x(now)}%"></b>` : ''}<span style="left:${x(p.at)}%">☀️</span></div>`;
+  })();
   return `<section class="card" id="sleep">${secHead('😴 Sleep', `<button class="link-btn" data-a="sleepSheet">Wake ${esc(tm(atTime(dkey(), c.wake)))} ✎</button>`)}
     <div class="sl-head">${head}</div>
-    <div class="sl-opts">${p.beds.map(b => `<div class="sl-opt ${b.at <= now ? 'past' : ''} ${pick && b.h === pick.h ? 'on' : ''}"><small>${b.h} hours</small><b>${tm(b.at)}</b></div>`).join('')}</div>
+    ${late
+      ? `<div class="sl-sub">If you fall asleep now, set an alarm for</div><div class="sl-opts">${nowWake.map(w => `<div class="sl-opt ${w.at <= p.at ? 'on' : ''}"><small>${w.h} hours</small><b>${tm(w.at)}</b></div>`).join('')}</div>`
+      : `<div class="sl-opts">${p.beds.map(b => `<div class="sl-opt ${b.at <= now ? 'past' : ''} ${b.h === pick.h ? 'on' : ''}"><small>${b.h} hours</small><b>${tm(b.at)}</b></div>`).join('')}</div>${bar}`}
     <div class="sl-why">${why}</div>
-    <div class="sl-now"><small>Going to bed right now?</small> Wake at <b>${nowWake[0]}</b> for 7h, <b>${nowWake[1]}</b> for 8h, <b>${nowWake[2]}</b> for 9h</div>
+    ${late ? '' : `<div class="sl-now"><small>Going to bed right now?</small> Wake at <b>${tm(nowWake[0].at)}</b> for 7h, <b>${tm(nowWake[1].at)}</b> for 8h, <b>${tm(nowWake[2].at)}</b> for 9h</div>`}
   </section>`;
 }
 function sleepSheet() {
@@ -1017,7 +1024,7 @@ async function loadPortfolio() {
 }
 function portfolioCard() {
   if (!S.widgets.portfolio || PF.ok === false) return '<span id="portfolio" hidden></span>';
-  if (!PF.ok) return `<section class="card" id="portfolio">${secHead('🤖 StockBot')}<div class="muted">Loading…</div></section>`;
+  if (!PF.ok) return `<section class="card" id="portfolio">${secHead('🤖 StockBot')}<div class="skel" style="width:58%;height:30px"></div><div class="skel" style="width:40%;margin-top:10px"></div><div class="pf-pos" style="margin-top:12px">${'<div class="skel" style="height:38px;padding:0"></div>'.repeat(4)}</div></section>`;
   const usd = n => (n < 0 ? '−$' : '$') + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const pct = n => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(2)}%`;
   const stale = Date.now() - PF.at > 26 * 36e5;
@@ -1091,7 +1098,7 @@ function spotifyCard() {
   if (!spOn() || !SPT.rt) return '<span id="spotify" hidden></span>';
   const head = secHead('🎧 Spotify', SP.url ? `<a class="link-btn" href="${esc(SP.url)}" target="_blank" rel="noopener">Open</a>` : '');
   if (SP.err) return `<section class="card" id="spotify">${head}<div class="muted">Couldn’t reach Spotify${SPT.rt ? '' : ' · connect again in Settings'}.</div></section>`;
-  if (!SP.ok) return `<section class="card" id="spotify">${head}<div class="muted">Loading…</div></section>`;
+  if (!SP.ok) return `<section class="card" id="spotify">${head}<div class="sp"><div class="skel" style="width:64px;height:64px;border-radius:10px;flex:none"></div><div style="flex:1"><div class="skel" style="width:70%"></div><div class="skel" style="width:45%;margin-top:8px"></div></div></div></section>`;
   if (SP.idle && !SP.title) return `<section class="card" id="spotify">${head}<div class="muted">Nothing playing right now.</div></section>`;
   const art = `<a class="sp-art" href="${esc(SP.url || 'https://open.spotify.com')}" target="_blank" rel="noopener">${SP.art ? `<img src="${esc(SP.art)}" alt="">` : ''}</a>`;
   return `<section class="card" id="spotify">${head}

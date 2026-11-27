@@ -964,3 +964,25 @@ body::before { display: none; }                                   /* flat backgr
 .rel-add { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--surface-2); color: var(--accent); font-size: 18px; font-weight: 700; border: 0; }
 .rel-add.on { background: var(--accent-soft); font-size: 14px; }
 .rel-add:active { transform: scale(.92); }
+
+/* ---------- v34 UI polish ---------- */
+/* StockBot positions: ticker and change on one line, no pill squeezed into the tile */
+.pf-pos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pf-pos div { gap: 6px; min-width: 0; padding: 9px 10px; }
+.pf-pos div b { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-pos .chg { background: none; padding: 0; margin: 0; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Money summary: let the small line wrap instead of cutting off "payday t…" */
+.msum em { white-space: normal; overflow: visible; line-height: 1.3; margin-top: 2px; }
+/* Skeleton loading blocks */
+.skel { height: 14px; border-radius: 8px; background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%); background-size: 200% 100%; animation: skel 1.3s ease-in-out infinite; }
+@keyframes skel { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .skel { animation: none; } }
+/* Sleep: a little night timeline under the bedtimes */
+.sl-sub { color: var(--muted); font-size: 13px; font-weight: 600; margin: -4px 0 8px; }
+.sl-bar { position: relative; height: 6px; border-radius: 6px; background: var(--surface-2); margin: 16px 4px 6px; }
+.sl-bar i { position: absolute; top: 0; bottom: 0; border-radius: 6px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 55%, transparent), var(--accent)); }
+.sl-bar b { position: absolute; top: -4px; width: 3px; height: 14px; border-radius: 2px; background: var(--text); transform: translateX(-50%); }
+.sl-bar span { position: absolute; top: 50%; transform: translate(-50%, -50%); font-size: 14px; line-height: 1; }
+/* Coming soon: countdown reads as a small badge */
+.rel-d { background: var(--surface-2); padding: 3px 8px; border-radius: 99px; font-size: 12px; min-width: 36px; text-align: center; }
+.rel:active { opacity: .7; }

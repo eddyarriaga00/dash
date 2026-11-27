@@ -986,3 +986,19 @@ body::before { display: none; }                                   /* flat backgr
 /* Coming soon: countdown reads as a small badge */
 .rel-d { background: var(--surface-2); padding: 3px 8px; border-radius: 99px; font-size: 12px; min-width: 36px; text-align: center; }
 .rel:active { opacity: .7; }
+
+/* ---------- v36: grouped Settings, tidy shift tips ---------- */
+.set-group { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 24px 16px 7px; }
+.settings-label[data-pos] { margin: 0 !important; box-shadow: none; }
+.settings-label[data-pos="mid"], .settings-label[data-pos="last"] { border-top-left-radius: 0; border-top-right-radius: 0; }
+.settings-label[data-pos="first"], .settings-label[data-pos="mid"] { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.settings-label[data-pos="mid"]::before, .settings-label[data-pos="last"]::before { content: ""; position: absolute; left: 57px; right: 0; top: 0; height: .5px; background: var(--border); }
+.settings-label[data-pos]:not(.shut) + .list { box-shadow: none; }
+.settings-label[data-pos="first"]:not(.shut) + .list, .settings-label[data-pos="mid"]:not(.shut) + .list { border-radius: 0; }
+/* Shift tips: one list instead of a pile of pills */
+#work .tips { flex-direction: column; flex-wrap: nowrap; gap: 0; background: var(--surface-2); border-radius: 14px; padding: 2px 12px; }
+#work .tip { background: none; border-radius: 0; padding: 9px 0; font-size: 14px; border-top: .5px solid var(--border); }
+#work .tip:first-child { border-top: 0; }
+#work .tip.hot { background: none; color: var(--warn); }
+#work .tip.late { background: none; color: var(--danger); }
+#work .tip.hot b, #work .tip.late b { color: inherit; }

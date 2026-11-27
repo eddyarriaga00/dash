@@ -2313,7 +2313,21 @@ function tidySettings(root) {
     el.innerHTML = `<span class="ic">${SET_ICON[name] || '⚙️'}</span><span>${esc(name)}</span>${I.chev}`;
     el.classList.toggle('shut', !setOpen.has(name));
   });
+  // Group the menu like iOS Settings: a small caption, then related rows joined in one rounded block.
+  const pairs = new Map(); let anchor = null;
+  $$('.settings-label', root).forEach(el => { const list = el.nextElementSibling; if (!anchor) { anchor = document.createComment('groups'); el.before(anchor); } pairs.set(el.dataset.name, [el, list && list.classList.contains('list') ? list : null]); });
+  if (!anchor) return;
+  const known = new Set(SET_GROUPS.flatMap(g => g[1])), extra = [...pairs.keys()].filter(n => !known.has(n));
+  const frag = document.createDocumentFragment();
+  for (const [title, names] of [...SET_GROUPS, ['More', extra]]) {
+    const have = names.filter(n => pairs.has(n)); if (!have.length) continue;
+    const cap = document.createElement('div'); cap.className = 'set-group'; cap.textContent = title; frag.append(cap);
+    have.forEach((n, i) => { const [el, list] = pairs.get(n); el.dataset.pos = have.length === 1 ? 'only' : i === 0 ? 'first' : i === have.length - 1 ? 'last' : 'mid'; frag.append(el); if (list) frag.append(list); });
+  }
+  anchor.replaceWith(frag);
 }
+const SET_GROUPS = [['You', ['Account', 'Cloud sync', 'Profile']], ['App', ['Appearance', 'Notifications', 'Home screen', 'Home widgets']],
+  ['Work & money', ['Work schedule', 'Work & pay', 'Bills']], ['Cards', ['Spotify', 'Weather', 'Focus & water', 'Quick links', 'Countdowns']], ['Data', ['Your data']]];
 const calm = matchMedia('(prefers-reduced-motion: reduce)');
 function render(animate = false) {
   if (animate === 'tab' && document.startViewTransition && !calm.matches && !render.vt) {

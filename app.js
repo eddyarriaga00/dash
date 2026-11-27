@@ -1892,7 +1892,7 @@ function searchResults(q) {
 /* ---------- home layout: sections you can collapse, reorder, and hide cards in ---------- */
 const CARD_LABEL = { routine: '🌅 Morning & night routine', weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', portfolio: '🤖 StockBot portfolio', spotify: '🎧 Spotify', sleep: '😴 Sleep', releases: '🍿 Coming soon', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
   moneySum: '💳 Money summary', pay: '💵 Pay estimate', spend: '💸 Spending', bills: '🧾 Bills', stocks: '📈 Watchlist', nba: '🏀 NBA', anime: '📺 Anime', links: '🔗 Quick links', tools: '⏱️ Focus & water', countdowns: '⏳ Countdowns' };
-const SECTIONS = [['top', '', ['routine', 'weather']], ['work', 'Work', ['work', 'week']], ['today', 'Today', ['today', 'sleep', 'tasks', 'habits', 'agenda', 'mood']],
+const SECTIONS = [['top', '', ['routine', 'weather']], ['work', 'Work & sleep', ['work', 'sleep', 'week']], ['today', 'Today', ['today', 'tasks', 'habits', 'agenda', 'mood']],
   ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'portfolio', 'stocks']], ['fun', 'For fun', ['spotify', 'releases', 'nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']]];
 // Pay, spending, bills and stocks live in the Money tab, so home shows a one-card summary by default.
 const LAYOUT_DEFAULT = () => ({ v: 2, sections: [], hidden: ['pay', 'spend', 'bills', 'stocks'], collapsed: [] });

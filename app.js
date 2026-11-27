@@ -80,7 +80,7 @@ const DEFAULTS = () => ({
     { id: uid(), name: 'Workout', emoji: '💪', when: 'any', target: 1, log: {} },
     { id: uid(), name: 'Read', emoji: '📚', when: 'pm', target: 1, log: {} },
   ],
-  widgets: { nba: true, anime: true, portfolio: true }, team: '', calUrl: '',  workCal: '', paydaySeen: '', xShifts: [], budgets: {}, notify: { on: false, work: true, brief: true, habits: true, tasks: true, bills: true, lead: 15, morning: '08:00', evening: '20:30' }, tags: ['School', 'Work', 'Personal', 'Errands'], tagFilter: '', spend: [], layout: null, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '',
+  widgets: { nba: true, anime: true, portfolio: true }, team: '', calUrl: '',  workCal: '', paydaySeen: '', xShifts: [], budgets: {}, notify: { on: false, work: true, brief: true, habits: true, tasks: true, bills: true, lead: 15, morning: '08:00', evening: '20:30', bed: true }, tags: ['School', 'Work', 'Personal', 'Errands'], tagFilter: '', spend: [], layout: null, shiftLog: {}, rate: 0, job: '', taxPct: 0, unpaidBreak: 0, commute: 25, payday: '', sleep: { wake: '07:30', goal: 8, buffer: 15, ready: 45 },
   kit: 'Badge, Water bottle, Lunch, Charger, Headphones', kitDone: { date: '', items: [] }, bills: [], billPaid: {},
   stocks: 'SPY, AAPL, NVDA',
   notes: [],
@@ -402,6 +402,84 @@ const pushCall = async body => {
 const pushHere = () => { try { return localStorage.getItem('dash.push') || ''; } catch { return ''; } };
 const canPush = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 const atTime = (day, hhmm) => { const [h, m] = String(hhmm || '08:00').split(':').map(Number); const d = parseKey(day); d.setHours(h || 0, m || 0, 0, 0); return d.getTime(); };
+/* ---------- sleep: when to be in bed for 7, 8 or 9 hours ---------- */
+const sleepCfg = () => ({ wake: '07:30', goal: 8, buffer: 15, ready: 45, ...(S.sleep || {}) });
+// When you need to be up on a given day: your usual wake time, or earlier if a shift needs it.
+function wakeFor(day) {
+  const c = sleepCfg(), usual = atTime(day, c.wake);
+  const sh = shifts().filter(e => !e.allDay && dkey(new Date(e.start)) === day).sort((a, b) => a.start - b.start)[0];
+  if (sh) { const need = sh.start - ((S.commute || 0) + (+c.ready || 0)) * 6e4; if (need < usual) return { at: need, shift: sh }; }
+  return { at: usual, shift: null };
+}
+// In bed this long before waking, for h hours of sleep plus the time it takes to drift off.
+const bedFor = (wake, h) => wake - h * 36e5 - (+sleepCfg().buffer || 0) * 6e4;
+function sleepPlan(now = Date.now()) {
+  const today = dkey(new Date(now)), w0 = wakeFor(today);
+  // Still the night before today's wake-up (more than 4 hours to go)? Plan for today, otherwise for tomorrow.
+  const day = now < w0.at - 4 * 36e5 ? today : dkey(addDays(new Date(now), 1));
+  const w = day === today ? w0 : wakeFor(day);
+  return { day, ...w, beds: [9, 8, 7].map(h => ({ h, at: bedFor(w.at, h) })) };
+}
+const hmin = ms => { const m = Math.max(0, Math.round(ms / 6e4)), h = Math.floor(m / 60); return h ? `${h}h${m % 60 ? ' ' + (m % 60) + 'm' : ''}` : `${m}m`; };
+const RELEASES = [
+  ['2026-12-02', '🎧', 'Spotify Wrapped', 'Usually early December'], ['2026-12-10', '🏆', 'The Game Awards', 'Games'],
+  ['2026-12-11', '🎬', 'Jumanji 3', 'Movie'], ['2026-12-18', '🎬', 'Avengers: Doomsday', 'Movie'], ['2026-12-18', '🎬', 'Dune: Part Three', 'Movie'],
+  ['2027-01-07', '🎌', 'Ichibancon', 'Concord · thru Jan 10'], ['2027-01-15', '🎬', 'Children of Blood and Bone', 'Movie'],
+  ['2027-01-16', '🏈', 'NFL Wild Card weekend', 'Playoffs start'], ['2027-01-16', '🎌', 'Madoka Magica: Walpurgisnacht Rising', 'In theaters thru Jan 19'],
+  ['2027-01-29', '🎌', 'Witch on the Holy Night', 'Anime film'], ['2027-02-04', '🎮', 'Metro 2039', 'Game'], ['2027-02-11', '🏀', 'NBA trade deadline', 'NBA'],
+  ['2027-02-12', '🎬', 'Narnia: The Magician’s Nephew', 'Movie'], ['2027-02-14', '🏈', 'Super Bowl LXI', 'SoFi Stadium'],
+  ['2027-02-18', '🎮', 'Persona 4 Revival', 'Game'], ['2027-02-21', '🏀', 'NBA All-Star Game', 'Phoenix'], ['2027-02-23', '🎮', 'Fable', 'Game'],
+  ['2027-02-27', '⚡', 'Pokémon Day', 'Pokémon Presents expected'], ['2027-03-19', '🎬', 'Sonic the Hedgehog 4', 'Movie'],
+  ['2027-03-19', '🏀', 'March Madness in Charlotte', 'Spectrum Center · Mar 19 & 21'], ['2027-03-26', '🎬', 'Godzilla x Kong: Supernova', 'Movie'],
+  ['2027-03-26', '🎌', 'Triad Anime Con', 'Winston-Salem · thru Mar 28'], ['2027-04-17', '🏀', 'NBA playoffs start', 'NBA'],
+  ['2027-04-29', '🏈', 'NFL Draft', 'Washington DC'], ['2027-04-30', '🎬', 'The Legend of Zelda', 'Live-action movie'],
+  ['2027-05-20', '🎮', 'God of War Laufey', 'PS5'], ['2027-05-28', '🎬', 'Star Wars: Starfighter', 'Movie'], ['2027-05-28', '🎌', 'Animazement', 'Raleigh · thru May 30'],
+  ['2027-06-18', '🎬', 'Spider-Man: Beyond the Spider-Verse', 'Movie'], ['2027-06-30', '🎬', 'Shrek 5', 'Movie'], ['2027-07-09', '🎬', 'Man of Tomorrow', 'DC movie'],
+  ['2027-07-23', '🎬', 'A Minecraft Movie 2', 'Movie'], ['2027-07-30', '🎬', 'A Quiet Place Part III', 'Movie'],
+];
+function releasesCard() {
+  const t = dkey(), have = new Set(S.countdowns.map(c => c.title.toLowerCase()));
+  const up = RELEASES.filter(r => r[0] >= t).slice(0, 5);
+  if (!up.length) return '<span id="releases" hidden></span>';
+  const when = k => { const n = dayDiff(new Date(), parseKey(k)); return n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : n < 14 ? `${n} days` : parseKey(k).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }); };
+  return `<section class="card" id="releases">${secHead('🍿 Coming soon')}
+    <div class="rel-list">${up.map(([k, ic, title, sub]) => `<div class="rel"><span class="rel-ic">${ic}</span><span class="rel-t"><b>${esc(title)}</b><small>${esc(sub)}</small></span><span class="rel-d">${when(k)}</span>
+      ${have.has(title.toLowerCase()) ? '<span class="rel-add on" aria-label="Countdown added">✓</span>' : `<button class="rel-add" data-a="relCountdown" data-k="${k}" data-t="${esc(title)}" data-e="${ic}" aria-label="Add a countdown for ${esc(title)}">+</button>`}</div>`).join('')}</div>
+  </section>`;
+}
+function sleepCard() {
+  const now = Date.now(), p = sleepPlan(now), c = sleepCfg();
+  const goal = p.beds.find(b => b.h === +c.goal) || p.beds[1];
+  const pick = goal.at > now ? goal : p.beds.find(b => b.at > now);
+  const left = p.at - now - (+c.buffer || 0) * 6e4;
+  const head = pick
+    ? `<b>In bed by ${tm(pick.at)}</b><span>${pick.h} hours of sleep · ${pick.at - now < 36e5 ? `<em>in ${hmin(pick.at - now)}</em>` : `in ${hmin(pick.at - now)}`}</span>`
+    : `<b>Get to bed now</b><span>${left > 0 ? `You’d still get about ${hmin(left)}` : 'Your wake-up is close'}</span>`;
+  const why = p.shift ? `Up at <b>${tm(p.at)}</b> for your ${tm(p.shift.start)} shift · ${S.commute || 0} min drive + ${c.ready} min to get ready`
+    : `Up at <b>${tm(p.at)}</b> ${dayDiff(new Date(now), parseKey(p.day)) === 0 ? 'today' : 'tomorrow'}`;
+  const nowWake = [7, 8, 9].map(h => tm(now + h * 36e5 + (+c.buffer || 0) * 6e4));
+  return `<section class="card" id="sleep">${secHead('😴 Sleep', `<button class="link-btn" data-a="sleepSheet">Wake ${esc(tm(atTime(dkey(), c.wake)))} ✎</button>`)}
+    <div class="sl-head">${head}</div>
+    <div class="sl-opts">${p.beds.map(b => `<div class="sl-opt ${b.at <= now ? 'past' : ''} ${pick && b.h === pick.h ? 'on' : ''}"><small>${b.h} hours</small><b>${tm(b.at)}</b></div>`).join('')}</div>
+    <div class="sl-why">${why}</div>
+    <div class="sl-now"><small>Going to bed right now?</small> Wake at <b>${nowWake[0]}</b> for 7h, <b>${nowWake[1]}</b> for 8h, <b>${nowWake[2]}</b> for 9h</div>
+  </section>`;
+}
+function sleepSheet() {
+  const c = sleepCfg();
+  openSheet(`
+    <div class="sheet-head"><div class="sheet-title" style="margin:0">Sleep</div><div class="spacer"></div><button class="ghost" data-a="closeSheet">Done</button></div>
+    <p class="muted" style="font-size:13px;margin:0 0 6px">Adults do best on 7 to 9 hours. On work days Dash wakes you early enough for your shift if it needs to.</p>
+    <label class="label">Usual wake-up time</label>
+    <input class="input" type="time" id="sl-wake" data-change="sleepWake" value="${esc(c.wake)}">
+    <label class="label">Hours you aim for</label>
+    <div class="chips" id="sl-goal">${[7, 8, 9].map(h => `<button type="button" class="chip ${+c.goal === h ? 'on' : ''}" data-a="sleepGoal" data-v="${h}">${h} hours</button>`).join('')}</div>
+    <div class="grid2">
+      <div><label class="label">Minutes to fall asleep</label><input class="input" type="number" inputmode="numeric" min="0" max="90" id="sl-buffer" data-change="sleepNum" data-k="buffer" value="${c.buffer}"></div>
+      <div><label class="label">Minutes to get ready for work</label><input class="input" type="number" inputmode="numeric" min="0" max="180" id="sl-ready" data-change="sleepNum" data-k="ready" value="${c.ready}"></div>
+    </div>`, { onClose: () => render() });
+}
+
 function buildReminders() {
   const N = S.notify || {}, now = Date.now(), out = [], all = shifts().filter(e => !e.allDay);
   const add = (at, title, body, tag) => { if (at > now + 30e3 && at < now + 8 * 864e5) out.push({ at: new Date(at).toISOString(), title, body: body || '', tag }); };
@@ -426,8 +504,8 @@ function buildReminders() {
       add(go - (+N.lead || 15) * 6e4, pl.mins ? `Leave ${allPlaces().length > 1 ? pl.name + ' ' : ''}by ${tm(go)}` : `Shift in ${(+N.lead || 15) + (S.early || 0)} min`, body, 'leave-' + e.start);
       // Dash may have the wrong idea of where you are. Anywhere with a longer drive gets its own, earlier heads-up.
       for (const x of others) { const gx = leaveAt(e.start, x); if (go - gx >= 5 * 6e4) add(gx - (+N.lead || 15) * 6e4, `At ${x.name}? Leave by ${tm(gx)}`, `Shift ${tm(e.start)} – ${tm(e.end)} · From ${pl.name}: ${tm(go)}`, 'leave-' + e.start + x.id); }
-      const early = new Date(e.start).getHours() < 12;
-      add(atTime(dkey(addDays(parseKey(day), -1)), '20:00'), `Work tomorrow ${tm(e.start)} – ${tm(e.end)}`, early ? `Bed by ${tm(e.start - ((S.commute || 0) + 45) * 6e4 - 8 * 36e5)} for 8 hours of sleep` : 'Pack what you need tonight', 'eve-' + e.start);
+      const wk = wakeFor(day), early = wk.shift && wk.shift.start === e.start;
+      add(atTime(dkey(addDays(parseKey(day), -1)), '20:00'), `Work tomorrow ${tm(e.start)} – ${tm(e.end)}`, early ? `Up at ${tm(wk.at)} · in bed by ${tm(bedFor(wk.at, +sleepCfg().goal || 8))} for ${+sleepCfg().goal || 8} hours of sleep` : 'Pack what you need tonight', 'eve-' + e.start);
     }
     // Habits: each habit's own reminder time, plus one evening nudge
     if (N.habits) {
@@ -439,6 +517,11 @@ function buildReminders() {
       const tmrTxt = tmr && !N.work ? `Tomorrow: work ${tm(tmr.start)} – ${tm(tmr.end)}${fromPlace().mins ? `, leave ${tm(leaveAt(tmr.start))}` : ''}` : '';
       if (night.length) add(atTime(day, N.evening), `🌙 Night routine · ${night.length}`, [night.slice(0, 4).map(h => h.name).join(', '), rest.length ? `+${rest.length} more left` : '', tmrTxt].filter(Boolean).join(' · '), 'habits-' + day);
       else if (rest.length) add(atTime(day, N.evening), `${rest.length} habit${rest.length === 1 ? '' : 's'} left today`, [rest.slice(0, 4).map(h => h.name).join(', '), tmrTxt].filter(Boolean).join(' · '), 'habits-' + day);
+    }
+    // Bedtime: 30 minutes before you need to be in bed for your sleep goal
+    if (N.bed) {
+      const wk = wakeFor(dkey(addDays(parseKey(day), 1))), g = +sleepCfg().goal || 8, bed = bedFor(wk.at, g);
+      add(bed - 30 * 6e4, `😴 Bed in 30 min`, `In bed by ${tm(bed)} for ${g} hours · up at ${tm(wk.at)}${wk.shift ? ` for your ${tm(wk.shift.start)} shift` : ''}`, 'bed-' + day);
     }
     // Tasks with a due date: a midday nudge on the day
     if (N.tasks && due.length) add(atTime(day, '13:00'), `${due.length} task${due.length === 1 ? '' : 's'} due today`, due.slice(0, 3).map(t => t.text).join(' · '), 'tasks-' + day);
@@ -1266,7 +1349,7 @@ function workCard() {
   // On shift: when you'd reach each place if you walk out right at the end.
   if (on && n.end) for (const x of allPlaces()) if (x.mins) tips.push(`<span class="tip">${esc(x.icon)} ${esc(x.name)} by <b>${tm(n.end + x.mins * 6e4)}</b></span>`);
   const tmrKey = dkey(addDays(new Date(), 1)), early = all.find(e => !e.allDay && dkey(new Date(e.start)) === tmrKey && new Date(e.start).getHours() < 12);
-  if (early) tips.push(`<span class="tip">😴 Bed by <b>${tm(early.start - ((S.commute || 0) + 45) * 6e4 - 8 * 36e5)}</b> for tomorrow’s ${tm(early.start)}</span>`);
+  if (early) { const wk = wakeFor(tmrKey), g = +sleepCfg().goal || 8; if (wk.shift) tips.push(`<span class="tip">😴 Bed by <b>${tm(bedFor(wk.at, g))}</b> for ${g}h before tomorrow’s ${tm(early.start)}</span>`); }
   const off = Array.from({ length: 14 }, (_, i) => addDays(new Date(), i)).find(d => !all.some(e => dkey(new Date(e.start)) === dkey(d)));
   if (off && dayDiff(new Date(), off) > 0) tips.push(`<span class="tip">🏖️ Next day off <b>${dayDiff(new Date(), off) === 1 ? 'tomorrow' : off.toLocaleDateString(undefined, { weekday: 'long' })}</b></span>`);
 
@@ -1656,6 +1739,8 @@ function viewHome() {
     stocks: () => stocksCard(),
     portfolio: () => portfolioCard(),
     spotify: () => spotifyCard(),
+    sleep: () => sleepCard(),
+    releases: () => releasesCard(),
     today: () => `<section class="card">
     <div class="today ${ringsDrawn ? '' : 'draw'}">
       <div class="ring-wrap">${rings([tt.total ? tt.done.length / tt.total : 0, dueH.length ? nDone / dueH.length : 0, sessions / FOCUS_GOAL])}</div>
@@ -1798,10 +1883,10 @@ function searchResults(q) {
 }
 
 /* ---------- home layout: sections you can collapse, reorder, and hide cards in ---------- */
-const CARD_LABEL = { routine: '🌅 Morning & night routine', weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', portfolio: '🤖 StockBot portfolio', spotify: '🎧 Spotify', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
+const CARD_LABEL = { routine: '🌅 Morning & night routine', weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', portfolio: '🤖 StockBot portfolio', spotify: '🎧 Spotify', sleep: '😴 Sleep', releases: '🍿 Coming soon', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
   moneySum: '💳 Money summary', pay: '💵 Pay estimate', spend: '💸 Spending', bills: '🧾 Bills', stocks: '📈 Watchlist', nba: '🏀 NBA', anime: '📺 Anime', links: '🔗 Quick links', tools: '⏱️ Focus & water', countdowns: '⏳ Countdowns' };
-const SECTIONS = [['top', '', ['routine', 'weather']], ['work', 'Work', ['work', 'week']], ['today', 'Today', ['today', 'tasks', 'habits', 'agenda', 'mood']],
-  ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'portfolio', 'stocks']], ['fun', 'For fun', ['spotify', 'nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']]];
+const SECTIONS = [['top', '', ['routine', 'weather']], ['work', 'Work', ['work', 'week']], ['today', 'Today', ['today', 'sleep', 'tasks', 'habits', 'agenda', 'mood']],
+  ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'portfolio', 'stocks']], ['fun', 'For fun', ['spotify', 'releases', 'nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']]];
 // Pay, spending, bills and stocks live in the Money tab, so home shows a one-card summary by default.
 const LAYOUT_DEFAULT = () => ({ v: 2, sections: [], hidden: ['pay', 'spend', 'bills', 'stocks'], collapsed: [] });
 function layout() { if (!S.layout || S.layout.v !== 2) { S.layout = LAYOUT_DEFAULT(); resnap('layout'); } return S.layout; }
@@ -2095,7 +2180,7 @@ function viewSettings() {
   <div class="list">
     ${pushHere() && S.notify.on ? `
       ${row('🔔', 'On for this device', `<span class="v">${buildReminders().length} coming up</span>`)}
-      ${[['brief', '🌅', 'Morning brief'], ['work', '💼', 'Work: leave-by and night before'], ['habits', '🔥', 'Habit reminders'], ['tasks', '✅', 'Tasks due'], ['bills', '🧾', 'Bills due tomorrow']].map(([k, ic, l]) =>
+      ${[['brief', '🌅', 'Morning brief'], ['work', '💼', 'Work: leave-by and night before'], ['habits', '🔥', 'Habit reminders'], ['tasks', '✅', 'Tasks due'], ['bills', '🧾', 'Bills due tomorrow'], ['bed', '😴', 'Bedtime (30 min before)']].map(([k, ic, l]) =>
         row(ic, l, `<span class="toggle" style="margin-left:auto"><input type="checkbox" data-change="ntf" data-k="${k}" ${S.notify[k] ? 'checked' : ''}><i></i></span>`)).join('')}
       ${row('⏰', 'Morning brief at', `<input class="inline" type="time" data-change="ntfTime" data-k="morning" value="${esc(S.notify.morning)}" style="width:auto">`)}
       ${row('🌙', 'Evening check-in at', `<input class="inline" type="time" data-change="ntfTime" data-k="evening" value="${esc(S.notify.evening)}" style="width:auto">`)}
@@ -2696,6 +2781,9 @@ const A = {
   unpinPlace: el => { setPlaceLL(el.dataset.id, null); save(); closeSheet(); render(); toast('Pin removed'); },
   setFrom: el => { S.from = el.dataset.id; save(); render(); },
   editCountdown: el => countdownSheet(byId('countdowns', el.dataset.id)),
+  sleepSheet: () => sleepSheet(),
+  sleepGoal: el => { S.sleep = { ...sleepCfg(), goal: +el.dataset.v }; save(); hapt(); document.querySelectorAll('#sl-goal .chip').forEach(b => b.classList.toggle('on', b === el)); },
+  relCountdown: el => { S.countdowns.push({ id: uid(), title: el.dataset.t.slice(0, 30), date: el.dataset.k, emoji: el.dataset.e, yearly: false }); save(); hapt(); render(); toast(`Counting down to ${el.dataset.t}`); },
   deleteCountdown: el => removeWithUndo('countdowns', el.dataset.id, 'Countdown'),
 
   pickChip: el => {
@@ -2940,6 +3028,8 @@ const CHANGES = {
   taxPct: el => { S.taxPct = Math.max(0, Math.min(60, +el.value || 0)); save(); },
   unpaidBreak: el => { S.unpaidBreak = Math.max(0, Math.min(120, +el.value || 0)); save(); },
   commute: el => { S.commute = Math.max(0, Math.min(180, +el.value || 0)); save(); },
+  sleepWake: el => { if (el.value) { S.sleep = { ...sleepCfg(), wake: el.value }; save(); } },
+  sleepNum: el => { const k = el.dataset.k, max = k === 'buffer' ? 90 : 180; S.sleep = { ...sleepCfg(), [k]: Math.max(0, Math.min(max, Math.round(+el.value || 0))) }; save(); },
   early: el => { S.early = Math.max(0, Math.min(60, +el.value || 0)); save(); },
   workAddr: el => { S.workAddr = el.value.trim(); save(); },
   payday: el => { S.payday = el.value; save(); },

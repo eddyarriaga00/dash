@@ -1002,3 +1002,7 @@ body::before { display: none; }                                   /* flat backgr
 #work .tip.hot { background: none; color: var(--warn); }
 #work .tip.late { background: none; color: var(--danger); }
 #work .tip.hot b, #work .tip.late b { color: inherit; }
+
+/* ---------- v37: sleep rows inside the shift tips ---------- */
+#work .tip s { text-decoration: line-through; opacity: .45; }
+#work .tip { flex-wrap: wrap; line-height: 1.35; }

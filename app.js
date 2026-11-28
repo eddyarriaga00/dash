@@ -1355,8 +1355,22 @@ function workCard() {
   if ((on || soon) && n.end) { const w = hourlyAt(n.end); if (w) tips.push(`<span class="tip">${w.icon} <b>${w.temp}°</b> heading home${w.rain >= 30 ? ` · ${w.rain}% rain` : ''}</span>`); }
   // On shift: when you'd reach each place if you walk out right at the end.
   if (on && n.end) for (const x of allPlaces()) if (x.mins) tips.push(`<span class="tip">${esc(x.icon)} ${esc(x.name)} by <b>${tm(n.end + x.mins * 6e4)}</b></span>`);
-  const tmrKey = dkey(addDays(new Date(), 1)), early = all.find(e => !e.allDay && dkey(new Date(e.start)) === tmrKey && new Date(e.start).getHours() < 12);
-  if (early) { const wk = wakeFor(tmrKey), g = +sleepCfg().goal || 8; if (wk.shift) tips.push(`<span class="tip">😴 Bed by <b>${tm(bedFor(wk.at, g))}</b> for ${g}h before tomorrow’s ${tm(early.start)}</span>`); }
+  // Everything about tonight's sleep, right with the shift it's for (tap any of them to change your wake-up).
+  {
+    const p = sleepPlan(now), c = sleepCfg(), buf = (+c.buffer || 0) * 6e4, goal = p.beds.find(x => x.h === +c.goal) || p.beds[1];
+    const pick = goal.at > now ? goal : p.beds.find(x => x.at > now), tap = 'data-a="sleepSheet" style="cursor:pointer"';
+    const dayWord = dayDiff(new Date(now), parseKey(p.day)) === 0 ? 'today' : 'tomorrow';
+    tips.push(`<span class="tip" ${tap}>⏰ Up at <b>${tm(p.at)}</b> ${p.shift ? `for ${dayWord}’s ${tm(p.shift.start)} shift · ${S.commute || 0} min drive + ${c.ready} min to get ready` : `${dayWord} · no early shift`}</span>`);
+    if (pick) {
+      tips.push(`<span class="tip ${pick.at - now < 36e5 ? 'hot' : ''}" ${tap}>😴 In bed by <b>${tm(pick.at)}</b> for ${pick.h}h · in ${hmin(pick.at - now)}</span>`);
+      tips.push(`<span class="tip" ${tap}>🛏️ ${p.beds.map(x => `${x.at <= now ? '<s>' : ''}${x.h}h <b>${tm(x.at)}</b>${x.at <= now ? '</s>' : ''}`).join(' · ')}</span>`);
+      tips.push(`<span class="tip" ${tap}>🌙 Going to bed right now? Wake at<br>${[7, 8, 9].map(h => `${h}h <b>${tm(now + h * 36e5 + buf)}</b>`).join(' · ')}</span>`);
+    } else {
+      const left = p.at - now - buf;
+      tips.push(`<span class="tip late" ${tap}>😴 Get to bed now · ${left > 0 ? `you’d still get about ${hmin(left)}` : 'your wake-up is close'}</span>`);
+      tips.push(`<span class="tip" ${tap}>⏰ Set an alarm for<br>${[7, 8, 9].map(h => `${h}h <b>${tm(now + h * 36e5 + buf)}</b>`).join(' · ')}</span>`);
+    }
+  }
   const off = Array.from({ length: 14 }, (_, i) => addDays(new Date(), i)).find(d => !all.some(e => dkey(new Date(e.start)) === dkey(d)));
   if (off && dayDiff(new Date(), off) > 0) tips.push(`<span class="tip">🏖️ Next day off <b>${dayDiff(new Date(), off) === 1 ? 'tomorrow' : off.toLocaleDateString(undefined, { weekday: 'long' })}</b></span>`);
 

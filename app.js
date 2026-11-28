@@ -3199,5 +3199,15 @@ const addParam = new URLSearchParams(location.search).get('add');
 if (addParam) { history.replaceState(null, '', location.pathname); setTimeout(() => addParam === 'note' ? noteSheet() : quickAddSheet(), 350); }
 setInterval(() => loadWeather(), 15 * 60e3);
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-  addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => { }));
+  // Pick up new versions by themselves: check whenever the app comes back to the front, and reload once the new files are ready.
+  const hadSW = !!navigator.serviceWorker.controller; let swReloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadSW || swReloaded) return; swReloaded = true;
+    const busy = () => { const el = document.activeElement; return el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName); };
+    const go = () => { if (busy()) setTimeout(go, 3000); else location.reload(); }; go();
+  });
+  addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    const check = () => { if (document.visibilityState === 'visible') reg.update().catch(() => { }); };
+    document.addEventListener('visibilitychange', check); setInterval(check, 30 * 6e4);
+  }).catch(() => { }));
 }

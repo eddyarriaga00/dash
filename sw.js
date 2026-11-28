@@ -1,12 +1,12 @@
 // Bump VERSION whenever you deploy changes so phones pick up the new files.
-const VERSION = 'dash-v38';
+const VERSION = 'dash-v39';
 const ASSETS = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png', './icons/favicon-32.png'
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -24,7 +24,7 @@ self.addEventListener('fetch', e => {
   e.respondWith(
     caches.open(VERSION).then(async cache => {
       const cached = await cache.match(req, { ignoreSearch: true });
-      const network = fetch(req).then(res => {
+      const network = fetch(req, { cache: 'no-cache' }).then(res => {
         if (res.ok) cache.put(req, res.clone());
         return res;
       }).catch(() => cached);

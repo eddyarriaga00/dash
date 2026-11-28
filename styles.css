@@ -1006,3 +1006,19 @@ body::before { display: none; }                                   /* flat backgr
 /* ---------- v37: sleep rows inside the shift tips ---------- */
 #work .tip s { text-decoration: line-through; opacity: .45; }
 #work .tip { flex-wrap: wrap; line-height: 1.35; }
+
+/* ---------- v38: GTA 6 updates ---------- */
+.gta-sum { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.gta-sum b { color: var(--accent); font-weight: 650; }
+.gta-list { display: flex; flex-direction: column; }
+.gta-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: .5px solid var(--border); color: inherit; text-decoration: none; }
+.gta-row:first-child { border-top: 0; }
+.gta-row > i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: transparent; }
+.gta-row.new > i { background: var(--accent); }
+.gta-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.gta-t b { font-weight: 600; font-size: 14.5px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.gta-t small { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gta-t em { font-style: normal; font-weight: 650; font-size: 11px; color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); padding: 1px 6px; border-radius: 99px; margin-right: 6px; }
+.gta-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.gta-tab { font: inherit; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 99px; border: 0; background: var(--surface-2); color: var(--muted); cursor: pointer; }
+.gta-tab.on { background: var(--accent-soft); color: var(--accent); }

@@ -980,6 +980,45 @@ function nbaCard() {
         <div class="gs">${g.state === 'in' ? '<i></i>' : ''}${g.state === 'pre' ? new Date(g.date).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : esc(g.detail)}</div></div>`).join('')}</div>`}
   </section>`;
 }
+/* ---------- GTA 6: the latest news, patches and Rockstar posts ---------- */
+let GTA = { ts: 0, items: null, err: false };
+try { const c = JSON.parse(localStorage.getItem('dash.gta')); if (c && Array.isArray(c.items)) GTA = { ts: c.ts || 0, items: c.items, err: false }; } catch {}
+const GTA_FEEDS = [['"GTA 6" OR "GTA VI" OR "Grand Theft Auto VI" when:3d', false], ['"GTA 6" (update OR patch OR "patch notes" OR hotfix OR DLC OR "GTA Online" OR Rockstar) when:14d', true]];
+const GTA_UPD = /\b(updates?|patch(es|ed)?|patch notes|hotfix(es)?|dlc|expansion|gta online|newswire|maintenance|servers?|bug ?fix(es)?|nerf(s|ed)?|buff(s|ed)?)\b/i;
+async function loadGTA(force) {
+  if (layout().hidden.includes('gta') || (!force && Date.now() - GTA.ts < 20 * 6e4)) return;
+  const had = GTA.ts; GTA.ts = Date.now();
+  const txt = t => String(t || '').replace(/&amp;/g, '&').replace(/&#0?39;|&apos;/g, '’').replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  const got = await Promise.allSettled(GTA_FEEDS.map(async ([q]) => {
+    const rss = `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`;
+    const j = await (await fetch('https://api.rss2json.com/v1/api.json?rss_url=' + encodeURIComponent(rss))).json();
+    if (j.status !== 'ok') throw new Error('feed'); return j.items || [];
+  }));
+  const seen = new Set(), items = [];
+  got.forEach((r, fi) => r.status === 'fulfilled' && r.value.forEach(it => {
+    const full = txt(it.title), cut = full.lastIndexOf(' - '), title = cut > 20 ? full.slice(0, cut) : full, src = cut > 20 ? full.slice(cut + 3) : '';
+    const at = Date.parse(String(it.pubDate || '').replace(' ', 'T') + 'Z'), key = title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 60);
+    if (!title || !/^https:\/\//.test(it.link || '') || !at || seen.has(key)) return; seen.add(key);
+    items.push({ title, src, at, link: it.link, upd: GTA_UPD.test(title) });
+  }));
+  if (items.length) {
+    GTA.items = items.sort((a, b) => b.at - a.at).slice(0, 20); GTA.err = false;
+    try { localStorage.setItem('dash.gta', JSON.stringify({ ts: GTA.ts, items: GTA.items })); } catch {}
+  } else { GTA.err = true; GTA.ts = GTA.items ? had : 0; }
+  const el = $('#gta'); if (el) el.outerHTML = gtaCard();
+}
+function gtaCard() {
+  const now = Date.now(), all = GTA.items || [], list = GTA.only ? all.filter(x => x.upd) : all, open = GTA.more ? list : list.slice(0, 6);
+  const age = t => { const m = Math.max(0, (now - t) / 6e4); return m < 60 ? `${Math.max(1, Math.round(m))}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`; };
+  const fresh = list.filter(x => now - x.at < 864e5).length, tab = (on, label, v) => `<button class="gta-tab ${on ? 'on' : ''}" data-a="gtaOnly" data-v="${v}">${label}</button>`;
+  return `<section class="card" id="gta">${secHead('🎮 GTA 6 updates', `<span style="display:flex;gap:14px"><button class="link-btn" data-a="gtaRefresh">Refresh</button><a class="link-btn" href="https://www.rockstargames.com/newswire" target="_blank" rel="noopener">Newswire</a></span>`)}
+    ${!GTA.items ? (GTA.err ? '<div class="muted">Couldn’t load GTA 6 news right now. Tap Refresh to try again.</div>' : '<div class="gta-list">' + '<div class="skel" style="height:44px;margin:8px 0"></div>'.repeat(4) + '</div>')
+      : `<div class="gta-tabs">${tab(!GTA.only, 'Everything', '')}${tab(GTA.only, 'Patches & updates', '1')}</div>
+      <div class="gta-sum">${!list.length ? 'No patch or update news in the last two weeks' : fresh ? `<b>${fresh} new</b> in the last 24 hours` : 'Nothing new in the last 24 hours'}${GTA.err ? ' · showing saved news' : ''}</div>
+      <div class="gta-list">${open.map(x => `<a class="gta-row ${now - x.at < 864e5 ? 'new' : ''}" href="${esc(x.link)}" target="_blank" rel="noopener"><span class="gta-t"><b>${esc(x.title)}</b><small>${x.upd ? '<em>Update</em>' : ''}${esc(x.src)}${x.src ? ' · ' : ''}${age(x.at)}</small></span><i></i></a>`).join('')}</div>
+      ${list.length > 6 ? `<button class="link-btn more" data-a="gtaMore">${GTA.more ? 'Show fewer' : `${list.length - 6} more ›`}</button>` : ''}`}
+  </section>`;
+}
 async function loadAnime() {
   if (!S.widgets.anime || (ANI.day === dkey() && ANI.list)) return;
   const a = Math.floor(parseKey(dkey()).getTime() / 1000), b = a + 86400;
@@ -1599,7 +1638,7 @@ function stocksCard() {
         <div class="px"><b>${x.price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b><span class="chg ${up ? 'up' : 'down'}">${up ? '+' : ''}${ch.toFixed(2)}%</span></div></div>`; }).join('')}</div>`}
   </section>`;
 }
-const loadWidgets = () => { if (S.tab === 'home') { loadNBA(); loadAnime(); loadPortfolio(); loadSpotify(); } if (S.tab === 'home' || S.tab === 'money') { loadCal(); loadStocks(); } };
+const loadWidgets = () => { if (S.tab === 'home') { loadNBA(); loadAnime(); loadPortfolio(); loadSpotify(); loadGTA(); } if (S.tab === 'home' || S.tab === 'money') { loadCal(); loadStocks(); } };
 
 /* =========================================================
    FOCUS TIMER
@@ -1655,7 +1694,7 @@ let sw = null, swipeEndedAt = 0;
 let ptr = null;
 async function refreshAll() {
   PF.ts = 0; ANI.day = ''; CAL.ts = 0;
-  await Promise.allSettled([loadWeather(true), loadNBA(true), loadAnime(), loadPortfolio(), loadSpotify(true), loadCal(true), loadStocks(true), syncNow()]);
+  await Promise.allSettled([loadWeather(true), loadNBA(true), loadGTA(true), loadAnime(), loadPortfolio(), loadSpotify(true), loadCal(true), loadStocks(true), syncNow()]);
   softRender();
 }
 document.addEventListener('touchstart', e => {
@@ -1762,6 +1801,7 @@ function viewHome() {
     spotify: () => spotifyCard(),
     sleep: () => sleepCard(),
     releases: () => releasesCard(),
+    gta: () => gtaCard(),
     today: () => `<section class="card">
     <div class="today ${ringsDrawn ? '' : 'draw'}">
       <div class="ring-wrap">${rings([tt.total ? tt.done.length / tt.total : 0, dueH.length ? nDone / dueH.length : 0, sessions / FOCUS_GOAL])}</div>
@@ -1904,10 +1944,10 @@ function searchResults(q) {
 }
 
 /* ---------- home layout: sections you can collapse, reorder, and hide cards in ---------- */
-const CARD_LABEL = { routine: '🌅 Morning & night routine', weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', portfolio: '🤖 StockBot portfolio', spotify: '🎧 Spotify', sleep: '😴 Sleep', releases: '🍿 Coming soon', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
+const CARD_LABEL = { routine: '🌅 Morning & night routine', weather: '🌤️ Weather', work: '💼 Shifts', week: '🗓️ Calendar', today: '🎯 Today progress', tasks: '✅ Up next', portfolio: '🤖 StockBot portfolio', spotify: '🎧 Spotify', sleep: '😴 Sleep', releases: '🍿 Coming soon', gta: '🎮 GTA 6 updates', habits: '🔥 Habits', agenda: '📅 Coming up', mood: '🙂 Mood',
   moneySum: '💳 Money summary', pay: '💵 Pay estimate', spend: '💸 Spending', bills: '🧾 Bills', stocks: '📈 Watchlist', nba: '🏀 NBA', anime: '📺 Anime', links: '🔗 Quick links', tools: '⏱️ Focus & water', countdowns: '⏳ Countdowns' };
 const SECTIONS = [['top', '', ['routine', 'weather']], ['work', 'Work & sleep', ['work', 'sleep', 'week']], ['today', 'Today', ['today', 'tasks', 'habits', 'agenda', 'mood']],
-  ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'portfolio', 'stocks']], ['fun', 'For fun', ['spotify', 'releases', 'nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']]];
+  ['money', 'Money', ['moneySum', 'pay', 'spend', 'bills', 'portfolio', 'stocks']], ['fun', 'For fun', ['spotify', 'releases', 'nba', 'anime']], ['tools', 'Tools', ['links', 'tools', 'countdowns']], ['gta', 'GTA 6', ['gta']]];
 // Pay, spending, bills and stocks live in the Money tab, so home shows a one-card summary by default.
 const LAYOUT_DEFAULT = () => ({ v: 2, sections: [], hidden: ['pay', 'spend', 'bills', 'stocks'], collapsed: [] });
 function layout() { if (!S.layout || S.layout.v !== 2) { S.layout = LAYOUT_DEFAULT(); resnap('layout'); } return S.layout; }
@@ -2818,6 +2858,9 @@ const A = {
   editCountdown: el => countdownSheet(byId('countdowns', el.dataset.id)),
   sleepSheet: () => sleepSheet(),
   sleepGoal: el => { S.sleep = { ...sleepCfg(), goal: +el.dataset.v }; save(); hapt(); document.querySelectorAll('#sl-goal .chip').forEach(b => b.classList.toggle('on', b === el)); },
+  gtaRefresh: async () => { hapt(); await loadGTA(true); toast(GTA.err ? 'Couldn’t reach the news feed' : 'GTA 6 news updated'); },
+  gtaOnly: el => { GTA.only = !!el.dataset.v; GTA.more = false; hapt(); const c = $('#gta'); if (c) c.outerHTML = gtaCard(); },
+  gtaMore: () => { GTA.more = !GTA.more; const el = $('#gta'); if (el) el.outerHTML = gtaCard(); },
   relCountdown: el => { S.countdowns.push({ id: uid(), title: el.dataset.t.slice(0, 30), date: el.dataset.k, emoji: el.dataset.e, yearly: false }); save(); hapt(); render(); toast(`Counting down to ${el.dataset.t}`); },
   deleteCountdown: el => removeWithUndo('countdowns', el.dataset.id, 'Countdown'),
 

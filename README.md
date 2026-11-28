@@ -42,5 +42,6 @@ python3 -m http.server 8787
 - **Spotify:** now playing with play/pause/skip. You connect your own Spotify app in Settings (PKCE, no secret); tokens stay on the device.
 - **Sleep:** when to be in bed for 7, 8 or 9 hours, based on your usual wake time or an early shift (drive + get-ready time). Optional bedtime notification 30 min before.
 - **Coming soon:** big movies, games, sports and anime dates; tap + to make a countdown.
+- **GTA 6 updates:** the latest GTA 6 news, patches and Rockstar posts at the bottom of Home.
 - **Pull to refresh:** pull down at the top of Home to reload weather, shifts, stocks, StockBot, Spotify, scores and sync.
 - **Rings, haptics, badge:** Fitness-style rings for tasks, habits and focus; light haptics on iPhone; the app icon shows tasks due.
